@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "kimi-code-plugin-cc": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "${CLAUDE_PLUGIN_ROOT}",
+        "kimi-code-plugin-mcp"
+      ]
+    }
+  }
+}
