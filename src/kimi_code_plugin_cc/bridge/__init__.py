@@ -1,0 +1,11 @@
+"""Bridge layer for spawning and parsing headless agent output."""
+
+from kimi_code_plugin_cc.bridge.parser import parse_stream_json
+from kimi_code_plugin_cc.bridge.runner import run_agent_process
+from kimi_code_plugin_cc.bridge.session import Session
+
+__all__ = [
+    "Session",
+    "parse_stream_json",
+    "run_agent_process",
+]
