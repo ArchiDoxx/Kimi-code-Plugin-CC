@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "kimi-code-plugin-cc",
+  "description": "Bridge headless CLI agents (Kimi Code, Codex, …) into Claude Code with review and planning loops.",
+  "version": "0.5.0",
+  "author": {
+    "name": "Kimi-Code-Plugin-CC Contributors"
+  },
+  "repository": "https://github.com/luceb/Kimi-code-Plugin-CC",
+  "license": "MIT",
+  "skills": "./skills",
+  "agents": "./agents",
+  "commands": "./commands",
+  "hooks": "./hooks/hooks.json"
+}
