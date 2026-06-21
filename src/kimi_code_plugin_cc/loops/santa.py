@@ -1,7 +1,24 @@
+"""Adversarial dual-review (santa) loop.
+
+The loop converges to ``green`` only when two *independent* reviewers both
+approve. v0.5's second reviewer is the host (Claude itself, via a callback the
+skill layer wires up). When no host callback is supplied — e.g. when the loop
+runs inside the MCP server, which cannot call back into the host — the second
+reviewer is an **independent, adversarially-framed** run of the same (or a
+different) external adapter. That keeps the loop callable from MCP while
+remaining genuinely adversarial (different prompt, independent verdict).
+
+Either way the loop is **fail-closed**: disagreement or non-convergence within
+``max_iterations`` yields ``red``, never ``green``.
+"""
+
 from __future__ import annotations
 
+import inspect
 import uuid
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +28,9 @@ from kimi_code_plugin_cc.protocol.messages import AgentMessage, increment_depth
 from .review import ReviewResult, ReviewVerdict, _extract_verdict
 
 DEFAULT_MAX_ITERATIONS = 3
+
+# The host reviewer may be sync or async; both are awaited safely.
+HostReviewer = Callable[[str, ReviewResult], ReviewResult | Awaitable[ReviewResult]]
 
 
 class SantaVerdict(StrEnum):
@@ -25,7 +45,7 @@ class SantaResult(BaseModel):
 
     verdict: SantaVerdict
     primary_review: ReviewResult
-    host_review: ReviewResult
+    secondary_review: ReviewResult
     iterations: int = Field(ge=1)
     explanation: str
 
@@ -42,14 +62,25 @@ def _build_initial_review_prompt(target: str) -> str:
 def _build_revision_prompt(
     target: str,
     primary_review: ReviewResult,
-    host_review: ReviewResult,
+    secondary_review: ReviewResult,
     iteration: int,
 ) -> str:
     return (
-        f"The host reviewer disagrees with your review (iteration {iteration}).\n\n"
+        f"Another reviewer disagrees with your review (iteration {iteration}).\n\n"
         f"Your previous review:\n{primary_review.review}\n\n"
-        f"Host review:\n{host_review.review}\n\n"
+        f"Their review:\n{secondary_review.review}\n\n"
         f"Please revise your review of the target:\n{target}"
+    )
+
+
+def _adversarial_prompt(target: str, primary_review: ReviewResult) -> str:
+    return (
+        "You are an INDEPENDENT adversarial reviewer. Another reviewer produced "
+        "the review below. Do NOT inherit their conclusion — form your own.\n\n"
+        f"Their review:\n{primary_review.review}\n\n"
+        "Only reply with 'approve' if you find no real issue. Respond with a "
+        "verdict (approve, request_changes, needs_discussion) and comments.\n\n"
+        f"Target:\n{target}"
     )
 
 
@@ -57,7 +88,7 @@ def _create_message(
     bridge_id: str,
     depth: int,
     payload: str,
-    metadata: dict | None,
+    metadata: dict[str, Any] | None,
 ) -> AgentMessage:
     return AgentMessage(
         bridge_id=bridge_id,
@@ -71,7 +102,7 @@ def _create_message(
 def _advance_message(
     message: AgentMessage,
     new_payload: str,
-    new_metadata: dict | None,
+    new_metadata: dict[str, Any] | None,
 ) -> AgentMessage:
     """Return a deeper copy of *message* with a new payload and metadata."""
     return increment_depth(message).model_copy(
@@ -88,55 +119,77 @@ def _to_review_result(response: AgentMessage, iteration: int) -> ReviewResult:
     )
 
 
-def _request_host_review(target: str, primary_review: ReviewResult) -> ReviewResult:
-    """v0.5 placeholder for the host (Claude itself) reviewer.
+async def _secondary_review(
+    target: str,
+    primary_review: ReviewResult,
+    iteration: int,
+    adversary_agent: str,
+    host_reviewer: HostReviewer | None,
+) -> ReviewResult:
+    """Obtain the independent second review.
 
-    In the skill layer this will be replaced by a callback to the host. The
-    default implementation echoes the primary review so that tests can inject a
-    deterministic host response by monkey-patching this function.
+    Prefers the host callback (truly heterogeneous: Claude reviewing itself).
+    Falls back to an independent, adversarially-framed external adapter run so
+    the loop stays callable when no host is wired (e.g. from the MCP server).
+    The host callback may be sync or async; both are awaited correctly.
     """
-    verdict_text = primary_review.verdict.value
-    return ReviewResult(
-        review=f"[HOST] Reviewed target. Primary verdict: {verdict_text}.",
-        verdict=primary_review.verdict,
-        iterations=1,
-        final_message=AgentMessage(
-            bridge_id=primary_review.final_message.bridge_id,
-            depth=0,
-            approval_policy="read-only",
-            payload="host review placeholder",
-            metadata={"loop": "santa", "role": "host"},
-        ),
+    if host_reviewer is not None:
+        result = host_reviewer(target, primary_review)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+    adapter = get(adversary_agent)
+    response = await adapter.run(
+        _adversarial_prompt(target, primary_review),
+        context={"loop": "santa", "role": "adversary"},
     )
+    return _to_review_result(response, iteration)
 
 
 def _build_explanation(
     primary: ReviewResult | None,
-    host: ReviewResult | None,
+    secondary: ReviewResult | None,
 ) -> str:
-    if primary is None or host is None:
+    if primary is None or secondary is None:
         return "No review produced."
     if primary.verdict != ReviewVerdict.APPROVE:
         return f"Primary reviewer did not approve ({primary.verdict.value})."
-    return f"Host reviewer did not approve ({host.verdict.value})."
+    return f"Secondary reviewer did not approve ({secondary.verdict.value})."
 
 
-def santa_loop(
+async def santa_loop(
     primary_agent: str,
     target: str,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
+    *,
+    adversary_agent: str | None = None,
+    host_reviewer: HostReviewer | None = None,
 ) -> SantaResult:
     """Run an adversarial dual-review loop.
 
-    The primary agent reviews the target; the host (Claude itself) reviews the
-    same target independently. The loop only returns ``green`` when both
-    reviewers approve. On disagreement the primary agent gets up to
-    *max_iterations* chances to revise, after which the result fail-closes to
-    ``red``.
+    The primary agent reviews the target; an independent second reviewer
+    (host callback if supplied, else an adversarially-framed external adapter)
+    reviews the same target. The loop returns ``green`` only when both
+    reviewers approve. On disagreement the primary gets up to *max_iterations*
+    revision rounds, after which the result fail-closes to ``red``.
+
+    Args:
+        primary_agent: Registered adapter for the primary review.
+        target: The artifact to review.
+        max_iterations: Maximum rounds before fail-closed ``red``.
+        adversary_agent: Optional adapter for the second reviewer. Defaults to
+            ``primary_agent`` (an independent, adversarially-framed re-run of
+            the same external agent). Pass a different agent for a
+            cross-model second opinion.
+        host_reviewer: Optional ``(target, primary_review) -> ReviewResult``
+            callback (sync or async). When provided it is used as the
+            (heterogeneous) second reviewer instead of an external adapter —
+            this is how the skill layer wires Claude itself as reviewer #2.
     """
     if max_iterations < 1:
         raise ValueError("max_iterations must be at least 1")
 
+    resolved_adversary = adversary_agent or primary_agent
     adapter = get(primary_agent)
     bridge_id = str(uuid.uuid4())
 
@@ -148,27 +201,29 @@ def santa_loop(
     )
 
     last_primary: ReviewResult | None = None
-    last_host: ReviewResult | None = None
+    last_secondary: ReviewResult | None = None
 
     for iteration in range(1, max_iterations + 1):
-        response = adapter.run(
+        response = await adapter.run(
             message.payload,
             context={"message": message.model_dump()},
         )
         primary_review = _to_review_result(response, iteration)
         last_primary = primary_review
 
-        host_review = _request_host_review(target, primary_review)
-        last_host = host_review
+        secondary_review = await _secondary_review(
+            target, primary_review, iteration, resolved_adversary, host_reviewer
+        )
+        last_secondary = secondary_review
 
         if (
             primary_review.verdict == ReviewVerdict.APPROVE
-            and host_review.verdict == ReviewVerdict.APPROVE
+            and secondary_review.verdict == ReviewVerdict.APPROVE
         ):
             return SantaResult(
                 verdict=SantaVerdict.GREEN,
                 primary_review=primary_review,
-                host_review=host_review,
+                secondary_review=secondary_review,
                 iterations=iteration,
                 explanation="Both reviewers approved.",
             )
@@ -178,15 +233,15 @@ def santa_loop(
 
         message = _advance_message(
             response,
-            _build_revision_prompt(target, primary_review, host_review, iteration),
+            _build_revision_prompt(target, primary_review, secondary_review, iteration),
             {"loop": "santa", "iteration": iteration},
         )
 
-    explanation = _build_explanation(last_primary, last_host)
+    explanation = _build_explanation(last_primary, last_secondary)
     return SantaResult(
         verdict=SantaVerdict.RED,
         primary_review=last_primary,
-        host_review=last_host,
+        secondary_review=last_secondary,
         iterations=max_iterations,
         explanation=explanation,
     )

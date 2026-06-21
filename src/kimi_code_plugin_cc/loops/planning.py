@@ -62,7 +62,7 @@ def _advance_message(
     )
 
 
-def planning_loop(
+async def planning_loop(
     agent_name: str,
     prompt: str,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
@@ -90,7 +90,7 @@ def planning_loop(
     last_response: AgentMessage | None = None
 
     for iteration in range(1, max_iterations + 1):
-        response = adapter.run(
+        response = await adapter.run(
             message.payload,
             context={"message": message.model_dump()},
         )

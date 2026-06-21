@@ -19,13 +19,13 @@ def main(argv: list[str] | None = None) -> int:
     mcp_parser = subparsers.add_parser("mcp", help="Start the MCP server")
     mcp_parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
+        choices=["stdio", "sse", "streamable-http"],
         default="stdio",
     )
 
-    args = parser.parse_args(argv)
+    args, mcp_extra = parser.parse_known_args(argv)
     if args.command == "mcp":
-        mcp_main()
+        mcp_main(mcp_extra)
         return 0
 
     parser.print_help()

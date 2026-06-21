@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest import mock
 
@@ -23,10 +24,28 @@ class EchoAdapter(AgentAdapter):
     def name(self) -> str:
         return self._name
 
-    def run(self, prompt: str, context: dict[str, Any]) -> AgentMessage:
+    async def run(self, prompt: str, context: dict[str, Any]) -> AgentMessage:
         return AgentMessage(
             bridge_id=context.get("bridge_id", ""),
             payload=f"echo: {prompt}",
+        )
+
+
+class StubAdapter(AgentAdapter):
+    """Test adapter returning a fixed payload regardless of the prompt."""
+
+    def __init__(self, name: str, payload: str) -> None:
+        self._name = name
+        self._payload = payload
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def run(self, prompt: str, context: dict[str, Any]) -> AgentMessage:
+        return AgentMessage(
+            bridge_id=context.get("bridge_id", self._name),
+            payload=self._payload,
         )
 
 
@@ -83,3 +102,39 @@ async def test_run_agent_unknown_agent_raises(echo_adapter: EchoAdapter) -> None
             "run_agent",
             {"agent_name": "missing", "prompt": "hello"},
         )
+
+
+async def test_run_review_loop_tool_returns_approve() -> None:
+    register("stub-review", StubAdapter("stub-review", "approve looks good"))
+    server = create_server()
+    content, _meta = await server.call_tool(
+        "run_review_loop",
+        {"agent_name": "stub-review", "target": "src/x.py", "max_iterations": 2},
+    )
+    payload = json.loads(content[0].text)
+    assert payload["verdict"] == "approve"
+    assert payload["iterations"] == 1
+
+
+async def test_run_santa_loop_tool_fail_closes_red() -> None:
+    register("stub-santa", StubAdapter("stub-santa", "request_changes real bug"))
+    server = create_server()
+    content, _meta = await server.call_tool(
+        "run_santa_loop",
+        {"primary_agent": "stub-santa", "target": "src/sec.py", "max_iterations": 1},
+    )
+    payload = json.loads(content[0].text)
+    assert payload["verdict"] == "red"
+    assert "did not approve" in payload["explanation"]
+
+
+async def test_run_planning_loop_tool_returns_plan() -> None:
+    register("stub-plan", StubAdapter("stub-plan", "plan: do step one then two"))
+    server = create_server()
+    content, _meta = await server.call_tool(
+        "run_planning_loop",
+        {"agent_name": "stub-plan", "prompt": "design storage", "max_iterations": 1},
+    )
+    payload = json.loads(content[0].text)
+    assert "step one" in payload["plan"]
+    assert payload["iterations"] == 1

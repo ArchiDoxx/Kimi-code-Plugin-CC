@@ -1,27 +1,35 @@
-# /kimi-review
+---
+description: Review a target with a single-agent loop, or an adversarial dual-review (santa) where Claude is the heterogeneous second reviewer.
+argument-hint: <target> [--loop review|santa] [--agent <name>]
+allowed-tools: mcp__kimi-code-plugin-cc__run_review_loop, mcp__kimi-code-plugin-cc__run_santa_loop, Read
+---
 
-Run a review loop or adversarial dual-review on a target artifact.
+Review a target artifact through the bridge.
 
-## Usage
+Arguments (raw): `$ARGUMENTS`
 
-```
-/kimi-review <target> [--loop review|santa] [--agent <agent-name>]
-```
+Steps:
 
-## Options
+1. Parse arguments:
+   - `target`: everything that is not a flag. If it looks like a file path,
+     Read the file and use its contents as the target text (so the external
+     agent gets the code, not just a path it cannot open in its worktree).
+   - `--loop`: `review` (default) or `santa`.
+   - `--agent`: primary reviewer (default `kimi`).
+2. Dispatch:
+   - For `review`: call `mcp__kimi-code-plugin-cc__run_review_loop` with
+     `agent_name`, `target`, `max_iterations=3`.
+   - For `santa`: call `mcp__kimi-code-plugin-cc__run_santa_loop` with
+     `primary_agent`, `target`, `max_iterations=3`. Note: this MCP tool uses an
+     external adversary as reviewer #2. For a TRUE heterogeneous dual-review,
+     after the tool returns, independently review the same target YOURSELF
+     (Claude) and only report an overall `green` if BOTH your verdict and the
+     tool's verdict are approve. Otherwise report fail-closed (`red`).
+3. Parse the returned JSON and summarise: verdict, iterations, and the key
+   findings. Quote concrete issues.
 
-- `target`: file path, code block, or description to review.
-- `--loop`: `review` for a single-agent loop, `santa` for adversarial dual-review (default: `review`).
-- `--agent`: primary reviewer agent (default: `kimi`).
-
-## Examples
-
-```
-/kimi-review src/kimi_code_plugin_cc/security/policy.py
-/kimi-review "the alarm threshold logic" --loop santa
-```
-
-## Safety notes
-
-- `santa-loop` is fail-closed: it never returns `green` unless both reviewers agree.
+Safety:
+- `santa` is fail-closed: never report `green` unless both reviewers approve.
 - Default approval policy is `read-only`.
+- If the agent returns the no-output sentinel (`needs_discussion: agent
+  returned no parseable output`), treat it as fail-safe, not approval.

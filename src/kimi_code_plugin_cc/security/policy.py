@@ -23,6 +23,7 @@ from pathlib import Path
 
 _ENV_MAX_POLICY = "KIMI_MAX_POLICY"
 _DEFAULT_POLICY_NAME = "read-only"
+_ENV_WORKTREE_BASE = "KIMI_WORKTREE_BASE"
 
 
 class ApprovalPolicy(IntEnum):
@@ -93,20 +94,27 @@ def resolve_effective_policy(
     return min(requested_enum, max_enum)
 
 
-def create_isolated_worktree(base_dir: Path | str) -> Path:
-    """Create a unique, isolated working directory under ``base_dir``.
+def create_isolated_worktree(base_dir: Path | str | None = None) -> Path:
+    """Create a unique, isolated working directory for a single agent turn.
 
     The directory is created with restrictive default permissions by
-    ``tempfile.mkdtemp`` and is intended to host a single agent turn so that
-    write access to the host repository is never implicit.
+    ``tempfile.mkdtemp`` so that write access to the host repository is never
+    implicit. By default it lives under the system temp directory (or the
+    ``KIMI_WORKTREE_BASE`` override) rather than the host repo, so isolation
+    does not litter the working tree.
 
     Args:
-        base_dir: Parent directory that must exist or be creatable.
+        base_dir: Parent directory. Defaults to ``$KIMI_WORKTREE_BASE`` if set,
+            otherwise the system temp directory. Must exist or be creatable.
 
     Returns:
         Absolute path to the newly created isolated directory.
     """
-    base = Path(base_dir).resolve()
+    if base_dir is None:
+        configured = os.environ.get(_ENV_WORKTREE_BASE)
+        base = Path(configured) if configured else Path(tempfile.gettempdir())
+    else:
+        base = Path(base_dir)
     base.mkdir(parents=True, exist_ok=True)
     worktree = Path(tempfile.mkdtemp(prefix="kimi_worktree_", dir=base))
     return worktree

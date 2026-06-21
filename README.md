@@ -1,5 +1,3 @@
-> **Work in progress** — v0.5 implementation in progress on branch `feat/v0.5-core`.
-
 # Kimi-Code-Plugin-CC
 
 A Claude Code plugin that brings headless CLI agents (Kimi Code, Codex, …) into
@@ -8,12 +6,19 @@ and adversarial dual-review (santa-loop) with a security-first design.
 
 ## Features (v0.5)
 
-- Spawn Kimi Code headlessly via `kimi -p ... --output-format stream-json`.
+- Spawn Kimi Code headlessly via `kimi -p ... --output-format stream-json`
+  (verified against Kimi Code 0.18.0).
 - Extensible agent registry (Kimi concrete, Codex skeleton).
+- Single async execution path: adapters `await` one shared, depth-guarded
+  runner, so the same code works in tests and inside the MCP event loop.
 - Message protocol with recursion depth-guard.
-- Read-only default policy, isolated worktrees, policy ceiling.
+- Read-only default policy, isolated worktrees (under the system temp dir),
+  policy ceiling via `KIMI_MAX_POLICY`.
+- Robust stream-json parsing: handles single-event, multi-event `tool_calls`,
+  and plain-prose output; empty output fails safe (never reads as approval).
 - Skills: `bridge`, `planning-loop`, `review-loop`, `santa-loop`.
-- MCP server with `run_agent` tool.
+- MCP server exposing `run_agent`, `run_review_loop`, `run_santa_loop`, and
+  `run_planning_loop`.
 
 ## Install (development)
 
@@ -46,11 +51,17 @@ Start the MCP server manually:
 uv run --project ${CLAUDE_PLUGIN_ROOT} kimi-code-plugin-mcp
 ```
 
-The server exposes a single tool:
+The server exposes four tools:
 
-- `run_agent(agent_name: str, prompt: str, approval_policy: str = "read-only")`
+- `run_agent(agent_name, prompt, approval_policy="read-only")` — one-shot run.
+- `run_review_loop(agent_name, target, max_iterations=3)` — iterative review.
+- `run_santa_loop(primary_agent, target, max_iterations=3)` — fail-closed
+  adversarial dual-review.
+- `run_planning_loop(agent_name, prompt, max_iterations=3)` — iterative plan.
 
 `approval_policy` is capped against the `KIMI_MAX_POLICY` environment variable.
+For review/planning, pass file **contents** as the target/prompt: the agent runs
+in an isolated worktree and cannot open arbitrary host paths.
 
 ## Live smoke-test steps
 

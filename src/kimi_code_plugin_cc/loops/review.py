@@ -87,7 +87,7 @@ def _build_result(response: AgentMessage, iteration: int) -> ReviewResult:
     )
 
 
-def review_loop(
+async def review_loop(
     agent_name: str,
     target: str,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
@@ -114,7 +114,7 @@ def review_loop(
     last_response: AgentMessage | None = None
 
     for iteration in range(1, max_iterations + 1):
-        response = adapter.run(
+        response = await adapter.run(
             message.payload,
             context={"message": message.model_dump()},
         )

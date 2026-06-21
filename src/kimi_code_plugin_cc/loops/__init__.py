@@ -14,4 +14,3 @@ __all__ = [
     "review_loop",
     "santa_loop",
 ]
-

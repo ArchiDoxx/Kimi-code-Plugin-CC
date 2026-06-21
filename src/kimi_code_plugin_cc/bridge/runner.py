@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
+from typing import Any
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 DEFAULT_MAX_DEPTH = 2
@@ -32,17 +33,44 @@ def _get_current_depth(env: dict[str, str] | None = None) -> int:
         return 0
 
 
+def assert_spawn_allowed(current_depth: int, max_depth: int) -> int:
+    """Authoritative recursion guard shared by runner and adapters.
+
+    Computes ``child_depth = current_depth + 1`` and raises ``RuntimeError``
+    when it falls outside ``[0, max_depth]``. Returns the validated child
+    depth on success. Centralising this keeps the guard message and semantics
+    identical across the async runner and any synchronous adapter wrapper.
+    """
+    child_depth = current_depth + 1
+    if not (0 <= child_depth <= max_depth):
+        raise RuntimeError(
+            "Depth guard blocked spawn: "
+            f"child depth {child_depth} exceeds limit {max_depth}"
+        )
+    return child_depth
+
+
 async def run_agent_process(
     args: list[str],
     env: dict[str, str] | None = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     max_depth: int | None = None,
+    cwd: str | os.PathLike[str] | None = None,
 ) -> RunResult:
     """Run a CLI agent asynchronously with depth-guard and timeout.
 
     The child environment receives ``KIMI_BRIDGE_DEPTH`` set to the current
     depth + 1. If that exceeds *max_depth* (default ``DEFAULT_MAX_DEPTH``),
     the call fails fast without spawning a process.
+
+    Args:
+        args: Argv list (already PATH-resolved by the caller on Windows).
+        env: Extra environment overrides merged on top of ``os.environ``.
+        timeout: Hard wall-clock timeout. Kills the process on expiry so a
+            hung/auth-required agent cannot block the host.
+        max_depth: Recursion ceiling. Defaults to ``DEFAULT_MAX_DEPTH``.
+        cwd: Optional working directory for the child process. Used for
+            worktree isolation; the adapter passes an isolated temp dir.
     """
     if not args:
         raise ValueError("args must not be empty")
@@ -50,21 +78,22 @@ async def run_agent_process(
     if env:
         merged_env.update(env)
     current_depth = _get_current_depth(merged_env)
-    child_depth = current_depth + 1
     limit = DEFAULT_MAX_DEPTH if max_depth is None else max_depth
-    if not (0 <= child_depth <= limit):
-        raise RuntimeError(
-            "Depth guard blocked spawn: "
-            f"child depth {child_depth} exceeds limit {limit}"
-        )
+    child_depth = assert_spawn_allowed(current_depth, limit)
     merged_env[DEPTH_ENV_VAR] = str(child_depth)
+
+    subprocess_kwargs: dict[str, Any] = {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+        "env": merged_env,
+        "shell": False,
+    }
+    if cwd is not None:
+        subprocess_kwargs["cwd"] = os.fspath(cwd)
 
     process = await asyncio.create_subprocess_exec(
         *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=merged_env,
-        shell=False,
+        **subprocess_kwargs,
     )
     try:
         stdout_bytes, stderr_bytes = await asyncio.wait_for(

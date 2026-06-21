@@ -39,5 +39,11 @@ v0.5 priorities are correctness, testability, and security defaults. Per-turn sp
 
 ## Notes
 
-- Command verified with Kimi 0.17.1: `kimi -p "<prompt>" --output-format stream-json`.
-- `--print`, `--final-message-only`, `--afk` do not exist in this version.
+- Command verified live with Kimi 0.18.0: `kimi -p "<prompt>" --output-format stream-json`.
+- `--print`, `--final-message-only` do not exist; `-y`/`--yolo`/`--auto` exist
+  but are auto-approve and are never injected by the bridge.
+- 0.18.0 also ships `acp`, `server`, and `login` subcommands (ACP remains the
+  v0.6 plan per the decision above).
+- The per-turn spawn is implemented as a single **async** runner that adapters
+  `await` (not `asyncio.run`), so it composes inside the MCP event loop. See
+  ADR-004.

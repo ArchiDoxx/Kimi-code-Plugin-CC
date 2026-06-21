@@ -18,7 +18,7 @@ class CodexAdapter(AgentAdapter):
     def name(self) -> str:
         return "codex"
 
-    def run(self, prompt: str, context: dict) -> AgentMessage:
+    async def run(self, prompt: str, context: dict) -> AgentMessage:
         raise NotImplementedError(
             "CodexAdapter is a skeleton for v0.5 and does not spawn processes yet."
         )
