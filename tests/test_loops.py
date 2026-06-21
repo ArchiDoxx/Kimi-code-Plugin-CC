@@ -26,7 +26,7 @@ class StubAdapter(AgentAdapter):
     def name(self) -> str:
         return self._name
 
-    def run(self, prompt: str, context: dict[str, Any]) -> AgentMessage:
+    async def run(self, prompt: str, context: dict[str, Any]) -> AgentMessage:
         self._calls.append((prompt, context))
         index = min(len(self._calls) - 1, len(self._responses) - 1)
         return AgentMessage(
@@ -38,40 +38,40 @@ class StubAdapter(AgentAdapter):
 
 
 class TestPlanningLoop:
-    def test_returns_plan_and_message(self) -> None:
+    async def test_returns_plan_and_message(self) -> None:
         adapter = StubAdapter("plan-agent", ["plan v1", "plan v1", "plan v1"])
         register("plan-agent", adapter)
-        result = planning_loop("plan-agent", "task", max_iterations=3)
+        result = await planning_loop("plan-agent", "task", max_iterations=3)
         assert isinstance(result, PlanResult)
         assert result.plan == "plan v1"
         assert result.iterations == 3
         assert result.status == "max_iterations"
 
-    def test_runs_multiple_iterations(self) -> None:
+    async def test_runs_multiple_iterations(self) -> None:
         adapter = StubAdapter("plan-agent-2", ["plan a", "plan b", "plan c"])
         register("plan-agent-2", adapter)
-        result = planning_loop("plan-agent-2", "task", max_iterations=3)
+        result = await planning_loop("plan-agent-2", "task", max_iterations=3)
         assert result.plan == "plan c"
         assert result.iterations == 3
         assert result.status == "max_iterations"
 
-    def test_invalid_max_iterations(self) -> None:
+    async def test_invalid_max_iterations(self) -> None:
         with pytest.raises(ValueError):
-            planning_loop("plan-agent", "task", max_iterations=0)
+            await planning_loop("plan-agent", "task", max_iterations=0)
 
 
 class TestReviewLoop:
-    def test_stops_early_on_approve(self) -> None:
+    async def test_stops_early_on_approve(self) -> None:
         adapter = StubAdapter(
             "review-agent", ["approve looks good", "request_changes bad"]
         )
         register("review-agent", adapter)
-        result = review_loop("review-agent", "src/x.py", max_iterations=3)
+        result = await review_loop("review-agent", "src/x.py", max_iterations=3)
         assert isinstance(result, ReviewResult)
         assert result.verdict == ReviewVerdict.APPROVE
         assert result.iterations == 1
 
-    def test_runs_up_to_max_iterations(self) -> None:
+    async def test_runs_up_to_max_iterations(self) -> None:
         adapter = StubAdapter(
             "review-agent-2",
             [
@@ -81,30 +81,34 @@ class TestReviewLoop:
             ],
         )
         register("review-agent-2", adapter)
-        result = review_loop("review-agent-2", "src/y.py", max_iterations=3)
+        result = await review_loop("review-agent-2", "src/y.py", max_iterations=3)
         assert result.verdict == ReviewVerdict.REQUEST_CHANGES
         assert result.iterations == 3
 
-    def test_invalid_max_iterations(self) -> None:
+    async def test_invalid_max_iterations(self) -> None:
         with pytest.raises(ValueError):
-            review_loop("review-agent", "target", max_iterations=0)
+            await review_loop("review-agent", "target", max_iterations=0)
 
 
 class TestSantaLoop:
-    def test_green_when_both_agree(self) -> None:
+    async def test_green_when_both_agree(self) -> None:
         adapter = StubAdapter("santa-primary", ["approve perfect"])
         register("santa-primary", adapter)
-        result = santa_loop("santa-primary", "src/z.py", max_iterations=3)
+        # Same stub acts as the independent adversary so no real CLI is spawned.
+        result = await santa_loop(
+            "santa-primary",
+            "src/z.py",
+            max_iterations=3,
+            adversary_agent="santa-primary",
+        )
         assert isinstance(result, SantaResult)
         assert result.verdict == SantaVerdict.GREEN
         assert result.iterations == 1
         assert "approved" in result.explanation
 
-    def test_red_on_disagreement(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_red_on_host_disagreement(self) -> None:
         adapter = StubAdapter("santa-primary-dis", ["approve perfect", "approve still"])
         register("santa-primary-dis", adapter)
-
-        from kimi_code_plugin_cc.loops import santa
 
         def host_disagrees(_target: str, _primary: ReviewResult) -> ReviewResult:
             return ReviewResult(
@@ -117,11 +121,49 @@ class TestSantaLoop:
                 ),
             )
 
-        monkeypatch.setattr(santa, "_request_host_review", host_disagrees)
-        result = santa_loop("santa-primary-dis", "src/z.py", max_iterations=2)
+        result = await santa_loop(
+            "santa-primary-dis",
+            "src/z.py",
+            max_iterations=2,
+            host_reviewer=host_disagrees,
+        )
         assert result.verdict == SantaVerdict.RED
         assert result.iterations == 2
 
-    def test_invalid_max_iterations(self) -> None:
+    async def test_red_with_async_host_reviewer(self) -> None:
+        # The host callback may be a coroutine; the loop must await it.
+        adapter = StubAdapter("santa-async-host", ["approve perfect", "approve still"])
+        register("santa-async-host", adapter)
+
+        async def host_disagrees(_target: str, _primary: ReviewResult) -> ReviewResult:
+            return ReviewResult(
+                review="async host rejects",
+                verdict=ReviewVerdict.REQUEST_CHANGES,
+                iterations=1,
+                final_message=AgentMessage(bridge_id="host", payload="rejects"),
+            )
+
+        result = await santa_loop(
+            "santa-async-host",
+            "src/z.py",
+            max_iterations=1,
+            host_reviewer=host_disagrees,
+        )
+        assert result.verdict == SantaVerdict.RED
+
+    async def test_red_when_external_adversary_disagrees(self) -> None:
+        # Primary approves but the independent adversary requests changes.
+        adapter = StubAdapter(
+            "santa-adv", ["approve perfect", "request_changes real bug"]
+        )
+        register("santa-adv", adapter)
+        result = await santa_loop(
+            "santa-adv", "src/sec.py", max_iterations=2, adversary_agent="santa-adv"
+        )
+        assert result.verdict == SantaVerdict.RED
+        assert result.iterations == 2
+        assert "did not approve" in result.explanation
+
+    async def test_invalid_max_iterations(self) -> None:
         with pytest.raises(ValueError):
-            santa_loop("santa-primary", "target", max_iterations=0)
+            await santa_loop("santa-primary", "target", max_iterations=0)

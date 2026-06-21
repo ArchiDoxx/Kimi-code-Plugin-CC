@@ -16,8 +16,12 @@ class AgentAdapter(ABC):
         """Human-readable agent identifier, e.g. ``\"kimi\"`` or ``\"codex\"``."""
 
     @abstractmethod
-    def run(self, prompt: str, context: dict) -> AgentMessage:
+    async def run(self, prompt: str, context: dict) -> AgentMessage:
         """Invoke the agent with ``prompt`` and return its response message.
+
+        Adapters are coroutines so they can ``await`` the shared async runner
+        directly. This is required because the MCP server executes tools inside
+        its event loop, where ``asyncio.run`` cannot be called.
 
         Args:
             prompt: The user/system prompt for this turn.

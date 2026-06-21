@@ -1,11 +1,11 @@
 ---
 name: review-loop
-description: Run an external agent in a review loop with a verdict (green/yellow/red) and iteration limit.
+description: Run an external agent in an iterative review loop that returns a verdict (approve / request_changes / needs_discussion) and stops early on approval. Use for code or design review by a headless CLI agent.
 ---
 
 # review-loop
 
-Use this skill to get structured feedback on code, a design, or any target artifact.
+Use this skill to get structured feedback on code, a design, or any target artifact from an external CLI agent.
 
 ## When to use
 
@@ -13,20 +13,29 @@ Use this skill to get structured feedback on code, a design, or any target artif
 - Design review for a module or API.
 - Checking a document or plan for issues.
 
+For high-stakes paths where two independent reviewers must agree, use
+`santa-loop` instead.
+
 ## How to use
 
-1. Provide the target (file path, code block, or description).
-2. The loop asks the reviewer agent for a verdict and comments.
-3. Iteration stops on `green` or after `max_iterations`.
+- Slash command: `/kimi-review <target> --loop review [--agent <name>]`
+- MCP tool directly: call `mcp__kimi-code-plugin-cc__run_review_loop` with
+  `agent_name` (default `kimi`), `target`, and `max_iterations` (default 3).
 
-## Parameters
+If the target is a file, pass its **contents** (not just the path): the agent
+runs in an isolated worktree and cannot open arbitrary host paths. The
+`/kimi-review` command reads the file for you.
 
-- `agent_name`: registered reviewer agent (default `kimi`).
-- `target`: the artifact to review.
-- `max_iterations`: maximum review rounds (default `3`).
+The loop asks for a verdict + comments and stops early on `approve`; otherwise
+it returns the last review, defaulting to `needs_discussion` when no verdict can
+be parsed.
+
+## Returns
+
+JSON: `review`, `verdict`, `iterations`, `final_message`.
 
 ## Example
 
 ```
-/review-loop agent_name=kimi target="src/kimi_code_plugin_cc/bridge/runner.py" max_iterations=2
+/kimi-review src/kimi_code_plugin_cc/bridge/runner.py --loop review
 ```

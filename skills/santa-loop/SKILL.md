@@ -1,6 +1,6 @@
 ---
 name: santa-loop
-description: Adversarial dual-review loop with heterogeneous reviewers. Fail-closed: never returns green unless both reviewers agree.
+description: Adversarial dual-review loop. Fail-closed - returns green only when two independent reviewers both approve. Use for security-critical or safety-critical reviews where false negatives are costly.
 ---
 
 # santa-loop
@@ -10,28 +10,41 @@ Use this skill for high-stakes reviews where two independent reviewers must agre
 ## When to use
 
 - Security-critical code paths.
-- Bewertungslogik or alarm logic.
-- Any review where false negatives are costly.
+- Safety-critical logic (e.g. an alarm or assessment module).
+- Any review where a false "looks fine" is costly.
 
-## How to use
+## How it works
 
-1. Provide the target artifact.
-2. The primary external agent reviews it.
-3. Claude itself acts as the second, heterogeneous reviewer.
-4. The loop only returns `green` if both reviewers agree; otherwise it fails closed.
+The primary external agent reviews the target. A second, independent reviewer
+also reviews it. The loop returns `green` only if BOTH approve; on disagreement
+the primary gets up to `max_iterations` revision rounds, then it fails closed to
+`red`.
 
-## Parameters
+Two ways to supply reviewer #2:
 
-- `primary_agent`: registered agent that performs the primary review (default `kimi`).
-- `target`: the artifact to review.
-- `max_iterations`: maximum rounds (default `3`).
+1. **External adversary (MCP tool):** call
+   `mcp__kimi-code-plugin-cc__run_santa_loop` with `primary_agent`, `target`,
+   `max_iterations`. Reviewer #2 is an independent, adversarially-framed re-run
+   of the external agent. This is fully automated but homogeneous.
+2. **Claude as heterogeneous reviewer #2 (recommended, via `/kimi-review
+   <target> --loop santa`):** run the tool for the external verdict, then
+   independently review the same target YOURSELF and report `green` only if both
+   your verdict and the tool's verdict approve. This is the true heterogeneous
+   dual-review and best protects against shared blind spots.
+
+## Returns
+
+JSON: `verdict` (`green`/`red`), `primary_review`, `secondary_review`,
+`iterations`, `explanation`.
+
+## Safety rule
+
+**Fail-closed.** If reviewers disagree or do not converge within
+`max_iterations`, the verdict is `red`, never `green`. The no-output sentinel
+(`needs_discussion: ...`) also never counts as approval.
 
 ## Example
 
 ```
-/santa-loop primary_agent=kimi target="src/kimi_code_plugin_cc/security/policy.py" max_iterations=3
+/kimi-review src/kimi_code_plugin_cc/security/policy.py --loop santa
 ```
-
-## Safety rule
-
-`santa-loop` is **fail-closed**. If reviewers disagree or do not converge within `max_iterations`, the result is `block` or `yellow`, never `green`.

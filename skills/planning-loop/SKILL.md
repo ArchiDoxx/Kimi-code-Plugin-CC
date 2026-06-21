@@ -1,6 +1,6 @@
 ---
 name: planning-loop
-description: Iteratively build or refine a plan with an external agent, stopping when the plan converges or the iteration limit is reached.
+description: Iteratively build or refine a plan with an external CLI agent, refining up to a max-iteration budget. Use when a task needs a structured plan before implementation.
 ---
 
 # planning-loop
@@ -15,18 +15,22 @@ Use this skill when a task needs a structured plan before implementation.
 
 ## How to use
 
-1. Describe the task or goal.
-2. The loop asks the registered planning agent for a plan.
-3. The plan is refined up to `max_iterations` times or until it stops changing.
-
-## Parameters
+Call the MCP tool `mcp__kimi-code-plugin-cc__run_planning_loop` with:
 
 - `agent_name`: registered agent to use (default `kimi`).
-- `prompt`: task description.
-- `max_iterations`: maximum refinement rounds (default `3`).
+- `prompt`: the task description.
+- `max_iterations`: maximum refinement rounds (default 3).
+
+The first iteration asks the agent to create a plan; each later iteration asks
+it to refine the previous plan. The loop always returns the final plan, with
+`status` = `max_iterations` when the budget is exhausted.
+
+## Returns
+
+JSON: `plan`, `iterations`, `status`, `final_message`.
 
 ## Example
 
-```
-/planning-loop agent_name=kimi prompt="Design the storage module for sensor readings" max_iterations=3
-```
+Call `mcp__kimi-code-plugin-cc__run_planning_loop` with
+`agent_name="kimi"`, `prompt="Design the storage module for sensor readings"`,
+`max_iterations=3`.

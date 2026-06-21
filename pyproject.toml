@@ -1,6 +1,6 @@
 [project]
 name = "kimi-code-plugin-cc"
-version = "0.5.0"
+version = "0.5.1"
 description = "Claude Code plugin for headless CLI-agent communication via Kimi Code"
 readme = "README.md"
 license = { text = "MIT" }
