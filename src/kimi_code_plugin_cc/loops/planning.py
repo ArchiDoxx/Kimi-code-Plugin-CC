@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from kimi_code_plugin_cc.agent_registry import get
-from kimi_code_plugin_cc.protocol.messages import AgentMessage, increment_depth
+from kimi_code_plugin_cc.protocol.messages import AgentMessage
 
 DEFAULT_MAX_ITERATIONS = 3
 
@@ -56,8 +56,12 @@ def _advance_message(
     new_payload: str,
     new_metadata: dict | None,
 ) -> AgentMessage:
-    """Return a deeper copy of *message* with a new payload and metadata."""
-    return increment_depth(message).model_copy(
+    """Return a copy of *message* with a new payload and metadata.
+
+    Loop iterations are refinement rounds, not recursion, so the depth is kept
+    constant (ADR-003).
+    """
+    return message.model_copy(
         update={"payload": new_payload, "metadata": new_metadata},
     )
 

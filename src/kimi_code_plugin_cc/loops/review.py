@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import re
 import uuid
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 from kimi_code_plugin_cc.agent_registry import get
-from kimi_code_plugin_cc.protocol.messages import AgentMessage, increment_depth
+from kimi_code_plugin_cc.protocol.messages import AgentMessage
 
 DEFAULT_MAX_ITERATIONS = 3
 
@@ -46,9 +47,17 @@ def _build_refinement_prompt(target: str, previous_review: str, iteration: int) 
 
 def _extract_verdict(text: str) -> ReviewVerdict:
     lowered = text.lower()
-    for choice in ReviewVerdict:
-        if choice.value in lowered:
+    # Fail-closed: non-approve verdicts take precedence and must match whole
+    # words. APPROVE is accepted only when no other verdict appears.
+    non_approve = [
+        ReviewVerdict.REQUEST_CHANGES,
+        ReviewVerdict.NEEDS_DISCUSSION,
+    ]
+    for choice in non_approve:
+        if re.search(rf"\b{re.escape(choice.value)}\b", lowered):
             return choice
+    if re.search(rf"\b{re.escape(ReviewVerdict.APPROVE.value)}\b", lowered):
+        return ReviewVerdict.APPROVE
     return ReviewVerdict.NEEDS_DISCUSSION
 
 
@@ -72,8 +81,12 @@ def _advance_message(
     new_payload: str,
     new_metadata: dict | None,
 ) -> AgentMessage:
-    """Return a deeper copy of *message* with a new payload and metadata."""
-    return increment_depth(message).model_copy(
+    """Return a copy of *message* with a new payload and metadata.
+
+    Loop iterations are refinement rounds, not recursion, so the depth is kept
+    constant (ADR-003).
+    """
+    return message.model_copy(
         update={"payload": new_payload, "metadata": new_metadata},
     )
 
