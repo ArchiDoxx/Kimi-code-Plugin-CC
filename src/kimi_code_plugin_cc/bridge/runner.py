@@ -108,7 +108,7 @@ async def run_agent_process(
         ) from None
 
     return RunResult(
-        returncode=process.returncode or 0,
+        returncode=process.returncode,
         stdout=stdout_bytes.decode("utf-8", errors="replace"),
         stderr=stderr_bytes.decode("utf-8", errors="replace"),
         args=args,
