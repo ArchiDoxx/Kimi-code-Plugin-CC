@@ -9,7 +9,12 @@ import pytest
 from kimi_code_plugin_cc.agent_registry import register
 from kimi_code_plugin_cc.agent_registry.base import AgentAdapter
 from kimi_code_plugin_cc.loops.planning import PlanResult, planning_loop
-from kimi_code_plugin_cc.loops.review import ReviewResult, ReviewVerdict, review_loop
+from kimi_code_plugin_cc.loops.review import (
+    ReviewResult,
+    ReviewVerdict,
+    _extract_verdict,
+    review_loop,
+)
 from kimi_code_plugin_cc.loops.santa import SantaResult, SantaVerdict, santa_loop
 from kimi_code_plugin_cc.protocol.messages import AgentMessage
 
@@ -167,3 +172,100 @@ class TestSantaLoop:
     async def test_invalid_max_iterations(self) -> None:
         with pytest.raises(ValueError):
             await santa_loop("santa-primary", "target", max_iterations=0)
+
+
+class DepthRecordingStub(AgentAdapter):
+    """Adapter that records the depth carried in the loop context per call.
+
+    Loop iteration is not recursion (ADR-003): successive refinement rounds
+    must NOT consume the recursion-depth budget. This stub captures the depth
+    the loop forwards so a test can assert it stays constant across iterations.
+    """
+
+    def __init__(self, name: str, payload: str) -> None:
+        self._name = name
+        self._payload = payload
+        self.observed_depths: list[int] = []
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def run(self, prompt: str, context: dict[str, Any]) -> AgentMessage:
+        message = context.get("message", {})
+        self.observed_depths.append(int(message.get("depth", 0)))
+        return AgentMessage(bridge_id="depth-stub", depth=0, payload=self._payload)
+
+
+class TestVerdictExtraction:
+    """The verdict parser must be fail-closed: it must never read a negated or
+    incidental mention of 'approve' as an approval, and disagreements must win."""
+
+    def test_explicit_approve_still_matches(self) -> None:
+        assert _extract_verdict("Verdict: approve, looks good") == ReviewVerdict.APPROVE
+
+    def test_negated_approve_does_not_approve(self) -> None:
+        # Regression: the old substring scan matched "approve" first and returned
+        # APPROVE here, flipping a fail-closed loop toward green.
+        assert (
+            _extract_verdict("I do not approve; request_changes needed for safety")
+            == ReviewVerdict.REQUEST_CHANGES
+        )
+
+    def test_approval_word_is_not_approve(self) -> None:
+        # "approval" contains the substring "approve" — a word-boundary scan must
+        # not treat it as a verdict.
+        assert (
+            _extract_verdict("approval workflow looks fine")
+            == ReviewVerdict.NEEDS_DISCUSSION
+        )
+
+    def test_disagreement_wins_over_approve(self) -> None:
+        assert (
+            _extract_verdict("approve overall, but request_changes for the edge case")
+            == ReviewVerdict.REQUEST_CHANGES
+        )
+
+    def test_needs_discussion_matched(self) -> None:
+        assert _extract_verdict("needs_discussion: open questions remain") == (
+            ReviewVerdict.NEEDS_DISCUSSION
+        )
+
+    def test_unknown_text_defaults_to_needs_discussion(self) -> None:
+        assert _extract_verdict("the cake is a lie") == ReviewVerdict.NEEDS_DISCUSSION
+
+    def test_case_insensitive(self) -> None:
+        assert _extract_verdict("REQUEST_CHANGES") == ReviewVerdict.REQUEST_CHANGES
+
+
+class TestLoopDepthConstancy:
+    """Loop iterations are refinement rounds, not recursion. The depth forwarded
+    into each adapter call must stay constant so the recursion guard (ADR-003)
+    is reserved for genuine nested delegation, not consumed by the loop itself."""
+
+    async def test_review_loop_keeps_depth_constant(self) -> None:
+        stub = DepthRecordingStub("depth-review", "needs_discussion maybe")
+        register("depth-review", stub)
+        await review_loop("depth-review", "target", max_iterations=3)
+        assert stub.observed_depths == [0, 0, 0]
+
+    async def test_planning_loop_keeps_depth_constant(self) -> None:
+        stub = DepthRecordingStub("depth-plan", "plan iter")
+        register("depth-plan", stub)
+        await planning_loop("depth-plan", "task", max_iterations=3)
+        assert stub.observed_depths == [0, 0, 0]
+
+    async def test_santa_loop_keeps_primary_depth_constant(self) -> None:
+        primary_stub = DepthRecordingStub("depth-santa", "request_changes nope")
+        register("depth-santa", primary_stub)
+        # Use a separate adversary so the recording stub only sees primary calls.
+        adversary_stub = StubAdapter("depth-santa-adv", ["request_changes nope"])
+        register("depth-santa-adv", adversary_stub)
+        await santa_loop(
+            "depth-santa",
+            "target",
+            max_iterations=3,
+            adversary_agent="depth-santa-adv",
+        )
+        # Three primary rounds, each at depth 0.
+        assert primary_stub.observed_depths == [0, 0, 0]
