@@ -29,7 +29,8 @@ and parses assistant content out of the stream.
 ## Safety defaults
 
 - Default approval policy is `read-only`; the server caps any request at
-  `KIMI_MAX_POLICY`.
+  `KIMI_MAX_POLICY`. In v0.5 this is also the only effectively implemented
+  policy — `accept-edits` and `explicit` are schema placeholders.
 - `--yolo`, `-y`, `--auto`, `--afk` are never passed automatically.
 - Each spawn runs in an isolated temporary worktree (under the system temp dir,
   not the host repo). Override the base with `KIMI_WORKTREE_BASE`.
