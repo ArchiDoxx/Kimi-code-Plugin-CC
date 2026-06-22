@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from kimi_code_plugin_cc.bridge.runner import (
     DEPTH_ENV_VAR,
@@ -206,4 +206,4 @@ class KimiCodeAdapter(AgentAdapter):
         from kimi_code_plugin_cc.security.policy import resolve_effective_policy
 
         effective = resolve_effective_policy(requested)
-        return effective.to_string()  # type: ignore[return-value]
+        return cast(ApprovalPolicyLiteral, effective.to_string())
