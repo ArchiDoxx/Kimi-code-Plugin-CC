@@ -6,6 +6,7 @@ from .messages import (
     AgentMessage,
     increment_depth,
     is_depth_allowed,
+    to_adapter_context,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "DEFAULT_POLICY",
     "increment_depth",
     "is_depth_allowed",
+    "to_adapter_context",
 ]

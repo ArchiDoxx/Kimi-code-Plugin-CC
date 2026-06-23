@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from kimi_code_plugin_cc.agent_registry import get
-from kimi_code_plugin_cc.protocol.messages import AgentMessage
+from kimi_code_plugin_cc.protocol.messages import AgentMessage, to_adapter_context
 
 DEFAULT_MAX_ITERATIONS = 3
 
@@ -96,10 +96,21 @@ async def planning_loop(
     for iteration in range(1, max_iterations + 1):
         response = await adapter.run(
             message.payload,
-            context={"message": message.model_dump()},
+            context=to_adapter_context(message),
         )
         last_response = response
+        previous_plan = current_plan
         current_plan = response.payload
+
+        # Converged: a refinement round returned the same plan, so further
+        # iterations add nothing. Stop early and report completion.
+        if iteration > 1 and current_plan.strip() == previous_plan.strip():
+            return PlanResult(
+                plan=current_plan,
+                iterations=iteration,
+                final_message=response,
+                status="complete",
+            )
 
         if iteration == max_iterations:
             return PlanResult(

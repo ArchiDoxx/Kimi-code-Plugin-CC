@@ -49,6 +49,22 @@ def increment_depth(message: AgentMessage) -> AgentMessage:
     return message.model_copy(update={"depth": message.depth + 1})
 
 
+def to_adapter_context(message: AgentMessage) -> dict[str, Any]:
+    """Build the adapter call context from a message.
+
+    Adapters (e.g. :class:`KimiCodeAdapter`) read ``bridge_id``, ``depth`` and
+    ``approval_policy`` as **top-level** keys. The loops previously nested these
+    under ``{"message": ...}``, so a real adapter silently fell back to defaults
+    (losing the conversation ``bridge_id`` and the requested policy). This is the
+    single canonical contract shared by the loops and the MCP ``run_agent`` tool.
+    """
+    return {
+        "bridge_id": message.bridge_id,
+        "depth": message.depth,
+        "approval_policy": message.approval_policy,
+    }
+
+
 def is_depth_allowed(message: AgentMessage | int, max_depth: int) -> bool:
     """Return True when ``depth`` is within ``[0, max_depth]``.
 

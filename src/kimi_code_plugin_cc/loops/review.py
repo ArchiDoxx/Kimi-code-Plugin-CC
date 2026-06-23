@@ -7,7 +7,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from kimi_code_plugin_cc.agent_registry import get
-from kimi_code_plugin_cc.protocol.messages import AgentMessage
+from kimi_code_plugin_cc.protocol.messages import AgentMessage, to_adapter_context
 
 DEFAULT_MAX_ITERATIONS = 3
 
@@ -45,18 +45,24 @@ def _build_refinement_prompt(target: str, previous_review: str, iteration: int) 
     )
 
 
+# Verdict patterns tolerate the space- or underscore-separated spelling an
+# agent may emit ("request_changes" or "request changes"). APPROVE also accepts
+# "approved"/"approves" but NOT "approval" — that noun is not a verdict and must
+# never read as one (fail-closed).
+_REQUEST_CHANGES_RE = re.compile(r"\brequest[ _]changes\b")
+_NEEDS_DISCUSSION_RE = re.compile(r"\bneeds[ _]discussion\b")
+_APPROVE_RE = re.compile(r"\bapprove[ds]?\b")
+
+
 def _extract_verdict(text: str) -> ReviewVerdict:
     lowered = text.lower()
-    # Fail-closed: non-approve verdicts take precedence and must match whole
-    # words. APPROVE is accepted only when no other verdict appears.
-    non_approve = [
-        ReviewVerdict.REQUEST_CHANGES,
-        ReviewVerdict.NEEDS_DISCUSSION,
-    ]
-    for choice in non_approve:
-        if re.search(rf"\b{re.escape(choice.value)}\b", lowered):
-            return choice
-    if re.search(rf"\b{re.escape(ReviewVerdict.APPROVE.value)}\b", lowered):
+    # Fail-closed: non-approve verdicts take precedence. APPROVE is accepted
+    # only when no disagreement verdict appears anywhere in the text.
+    if _REQUEST_CHANGES_RE.search(lowered):
+        return ReviewVerdict.REQUEST_CHANGES
+    if _NEEDS_DISCUSSION_RE.search(lowered):
+        return ReviewVerdict.NEEDS_DISCUSSION
+    if _APPROVE_RE.search(lowered):
         return ReviewVerdict.APPROVE
     return ReviewVerdict.NEEDS_DISCUSSION
 
@@ -129,7 +135,7 @@ async def review_loop(
     for iteration in range(1, max_iterations + 1):
         response = await adapter.run(
             message.payload,
-            context={"message": message.model_dump()},
+            context=to_adapter_context(message),
         )
         last_response = response
         result = _build_result(response, iteration)

@@ -43,14 +43,16 @@ class StubAdapter(AgentAdapter):
 
 
 class TestPlanningLoop:
-    async def test_returns_plan_and_message(self) -> None:
+    async def test_converges_and_reports_complete(self) -> None:
+        # Identical refinement output means the plan converged: stop early and
+        # report status="complete" (previously this status was unreachable).
         adapter = StubAdapter("plan-agent", ["plan v1", "plan v1", "plan v1"])
         register("plan-agent", adapter)
         result = await planning_loop("plan-agent", "task", max_iterations=3)
         assert isinstance(result, PlanResult)
         assert result.plan == "plan v1"
-        assert result.iterations == 3
-        assert result.status == "max_iterations"
+        assert result.iterations == 2
+        assert result.status == "complete"
 
     async def test_runs_multiple_iterations(self) -> None:
         adapter = StubAdapter("plan-agent-2", ["plan a", "plan b", "plan c"])
@@ -192,9 +194,32 @@ class DepthRecordingStub(AgentAdapter):
         return self._name
 
     async def run(self, prompt: str, context: dict[str, Any]) -> AgentMessage:
-        message = context.get("message", {})
-        self.observed_depths.append(int(message.get("depth", 0)))
-        return AgentMessage(bridge_id="depth-stub", depth=0, payload=self._payload)
+        # Reads the canonical top-level contract, same as the real adapter.
+        self.observed_depths.append(int(context.get("depth", 0)))
+        # Vary the payload per call so the planning loop does not converge early;
+        # the verdict keyword is preserved and never becomes an approval.
+        payload = f"{self._payload} (round {len(self.observed_depths)})"
+        return AgentMessage(bridge_id="depth-stub", depth=0, payload=payload)
+
+
+class ContractRecordingStub(AgentAdapter):
+    """Records the full call context so a test can assert the loops forward the
+    canonical top-level contract (bridge_id, depth, approval_policy) the real
+    adapter reads — not the old nested ``{"message": ...}`` shape that silently
+    dropped every field to its default."""
+
+    def __init__(self, name: str, payload: str) -> None:
+        self._name = name
+        self._payload = payload
+        self.contexts: list[dict[str, Any]] = []
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def run(self, prompt: str, context: dict[str, Any]) -> AgentMessage:
+        self.contexts.append(context)
+        return AgentMessage(bridge_id="contract-stub", depth=0, payload=self._payload)
 
 
 class TestVerdictExtraction:
@@ -269,3 +294,63 @@ class TestLoopDepthConstancy:
         )
         # Three primary rounds, each at depth 0.
         assert primary_stub.observed_depths == [0, 0, 0]
+
+
+class TestLoopAdapterContract:
+    """Each loop must forward the canonical top-level context the real adapter
+    reads. The old nested ``{"message": ...}`` shape made the real KimiCodeAdapter
+    silently fall back to defaults (bridge_id "kimi", depth 0, read-only) — a
+    contract mismatch masked because the test stubs read the nested shape too."""
+
+    async def test_review_loop_forwards_top_level_context(self) -> None:
+        stub = ContractRecordingStub("contract-review", "needs_discussion")
+        register("contract-review", stub)
+        await review_loop("contract-review", "target", max_iterations=1)
+        ctx = stub.contexts[0]
+        assert set(ctx) >= {"bridge_id", "depth", "approval_policy"}
+        assert ctx["depth"] == 0
+        assert ctx["approval_policy"] == "read-only"
+        # bridge_id is the conversation UUID, not the adapter-name fallback.
+        assert ctx["bridge_id"] not in ("", "kimi", "contract-review")
+
+    async def test_planning_loop_forwards_top_level_context(self) -> None:
+        stub = ContractRecordingStub("contract-plan", "a plan")
+        register("contract-plan", stub)
+        await planning_loop("contract-plan", "task", max_iterations=1)
+        ctx = stub.contexts[0]
+        assert set(ctx) >= {"bridge_id", "depth", "approval_policy"}
+
+    async def test_santa_loop_forwards_top_level_context(self) -> None:
+        stub = ContractRecordingStub("contract-santa", "request_changes")
+        register("contract-santa", stub)
+        await santa_loop(
+            "contract-santa",
+            "target",
+            max_iterations=1,
+            adversary_agent="contract-santa",
+        )
+        ctx = stub.contexts[0]
+        assert set(ctx) >= {"bridge_id", "depth", "approval_policy"}
+
+
+class TestVerdictTolerance:
+    """The parser tolerates spacing/inflection variants while staying fail-closed."""
+
+    def test_request_changes_with_space(self) -> None:
+        assert _extract_verdict("please request changes here") == (
+            ReviewVerdict.REQUEST_CHANGES
+        )
+
+    def test_needs_discussion_with_space(self) -> None:
+        assert _extract_verdict("this needs discussion first") == (
+            ReviewVerdict.NEEDS_DISCUSSION
+        )
+
+    def test_approved_inflection_matches(self) -> None:
+        assert _extract_verdict("looks good, approved") == ReviewVerdict.APPROVE
+
+    def test_approval_noun_still_not_approve(self) -> None:
+        # Fail-closed guard must survive the more tolerant pattern.
+        assert _extract_verdict("the approval process is documented") == (
+            ReviewVerdict.NEEDS_DISCUSSION
+        )

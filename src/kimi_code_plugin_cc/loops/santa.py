@@ -23,7 +23,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from kimi_code_plugin_cc.agent_registry import get
-from kimi_code_plugin_cc.protocol.messages import AgentMessage
+from kimi_code_plugin_cc.protocol.messages import AgentMessage, to_adapter_context
 
 from .review import ReviewResult, ReviewVerdict, _extract_verdict
 
@@ -210,7 +210,7 @@ async def santa_loop(
     for iteration in range(1, max_iterations + 1):
         response = await adapter.run(
             message.payload,
-            context={"message": message.model_dump()},
+            context=to_adapter_context(message),
         )
         primary_review = _to_review_result(response, iteration)
         last_primary = primary_review
