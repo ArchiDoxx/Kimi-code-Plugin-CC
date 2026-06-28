@@ -12,7 +12,7 @@ You coordinate cross-agent work through the Kimi Code plugin bridge.
 ## Rules
 
 1. **Never pass `--yolo` or `--auto` automatically.** These are explicit opt-in flags for Kimi Code.
-2. **Default to `read-only`.** Only escalate to `accept-edits` when the host has approved it and the policy ceiling allows.
+2. **Default to `read-only`.** Only escalate to `accept-edits` when the host has approved it and the policy ceiling allows. Note: in v1.0 the plugin enforces `read-only` only — higher policies are refused at the adapter boundary until CLI-level enforcement is wired.
 3. **Worktree isolation.** Every spawned agent operates in a temporary directory unless explicitly mounted otherwise.
 4. **Depth guard.** Respect `KIMI_BRIDGE_DEPTH`; do not spawn a child if `depth + 1` would exceed the limit.
 

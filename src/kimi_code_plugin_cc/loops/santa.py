@@ -1,7 +1,7 @@
 """Adversarial dual-review (santa) loop.
 
 The loop converges to ``green`` only when two *independent* reviewers both
-approve. v0.5's second reviewer is the host (Claude itself, via a callback the
+approve. v1.0's second reviewer is the host (Claude itself, via a callback the
 skill layer wires up). When no host callback is supplied — e.g. when the loop
 runs inside the MCP server, which cannot call back into the host — the second
 reviewer is an **independent, adversarially-framed** run of the same (or a
@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from kimi_code_plugin_cc.agent_registry import get
 from kimi_code_plugin_cc.protocol.messages import AgentMessage, to_adapter_context
 
-from .review import ReviewResult, ReviewVerdict, _extract_verdict
+from .review import ReviewResult, ReviewVerdict, extract_verdict
 
 DEFAULT_MAX_ITERATIONS = 3
 
@@ -55,6 +55,9 @@ def _build_initial_review_prompt(target: str) -> str:
         "Perform a thorough code review of the following target. "
         "Respond with a verdict (approve, request_changes, needs_discussion) "
         "and comments.\n\n"
+        "On a final line, output exactly "
+        "`VERDICT: <approve|request_changes|needs_discussion>` so the verdict "
+        "is machine-readable.\n\n"
         f"Target:\n{target}"
     )
 
@@ -117,7 +120,7 @@ def _advance_message(
 def _to_review_result(response: AgentMessage, iteration: int) -> ReviewResult:
     return ReviewResult(
         review=response.payload,
-        verdict=_extract_verdict(response.payload),
+        verdict=extract_verdict(response.payload),
         iterations=iteration,
         final_message=response,
     )

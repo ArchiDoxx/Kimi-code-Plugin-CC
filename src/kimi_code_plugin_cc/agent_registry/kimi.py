@@ -36,7 +36,7 @@ KIMI_EXECUTABLE = "kimi"
 # it as "needs discussion" (fail-safe), never as an approval.
 EMPTY_RESPONSE_SENTINEL = "needs_discussion: agent returned no parseable output"
 
-# v0.5 capability posture: these auto-approve flags are NEVER injected. The
+# v1.0 capability posture: these auto-approve flags are NEVER injected. The
 # policy is enforced structurally (no flag) plus worktree isolation plus the
 # KIMI_MAX_POLICY ceiling; see ADR-002.
 NEVER_FLAGS = ("--yolo", "-y", "--auto", "--afk")
@@ -108,18 +108,32 @@ class KimiCodeAdapter(AgentAdapter):
         inherited environment (defense in depth, identical message). The call
         is awaited (not ``asyncio.run``) so it composes inside the MCP server's
         event loop.
+
+        The isolated worktree (when created fresh for this turn) is removed in
+        a ``finally`` so long-running MCP sessions do not leak temp dirs.
         """
         assert_spawn_allowed(depth, DEFAULT_MAX_DEPTH)
 
         resolved = self._resolve_executable(command)
-        cwd = self._resolve_workdir()
-        result = await run_agent_process(
-            resolved,
-            env={DEPTH_ENV_VAR: str(depth)},
-            timeout=self._timeout,
-            max_depth=DEFAULT_MAX_DEPTH,
-            cwd=cwd,
+        workdir = self._resolve_workdir()
+        # We own the worktree only if we created it fresh this turn (no explicit
+        # worktree was supplied). Explicit worktrees are caller-managed.
+        own_workdir = (
+            workdir
+            if (self._use_isolated_worktree and self._worktree is None)
+            else None
         )
+        try:
+            result = await run_agent_process(
+                resolved,
+                env={DEPTH_ENV_VAR: str(depth)},
+                timeout=self._timeout,
+                max_depth=DEFAULT_MAX_DEPTH,
+                cwd=workdir,
+            )
+        finally:
+            if own_workdir is not None:
+                shutil.rmtree(own_workdir, ignore_errors=True)
         if result.returncode != 0:
             raise RuntimeError(
                 f"Kimi CLI exited with {result.returncode}: {result.stderr.strip()}"
@@ -199,11 +213,30 @@ class KimiCodeAdapter(AgentAdapter):
         return None
 
     def _resolve_policy(self, context: dict) -> ApprovalPolicyLiteral:
-        """Return the requested policy capped against KIMI_MAX_POLICY."""
+        """Return the effective policy, enforcing the read-only contract.
+
+        The policy is capped against ``KIMI_MAX_POLICY``. In v1.0 the plugin
+        enforces **only** ``read-only`` at the CLI boundary: kimi has no
+        verified programmatic read-only/edit-accept flag in the pinned CLI
+        version, so a policy above ``read-only`` would be *recorded* as granted
+        but never *enacted* — a correctness and honesty defect. We therefore
+        refuse any effective policy above ``read-only`` with a clear error
+        instead of silently pretending it was honored. Worktree isolation
+        remains the backstop for filesystem writes.
+        """
         requested = context.get("approval_policy", DEFAULT_POLICY)
         if requested not in ("read-only", "accept-edits", "explicit"):
             requested = DEFAULT_POLICY
         from kimi_code_plugin_cc.security.policy import resolve_effective_policy
 
         effective = resolve_effective_policy(requested)
-        return cast(ApprovalPolicyLiteral, effective.to_string())
+        effective_str = cast(ApprovalPolicyLiteral, effective.to_string())
+        if effective_str != "read-only":
+            raise PermissionError(
+                "Policy escalation to "
+                f"{effective_str!r} is not supported in v1.0: kimi has no "
+                "verified CLI flag for non-read-only execution, so the policy "
+                "would be recorded but not enacted. Use 'read-only' (the only "
+                "enforced policy) and handle edits out-of-band."
+            )
+        return effective_str

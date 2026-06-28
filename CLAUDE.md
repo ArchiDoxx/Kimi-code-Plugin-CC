@@ -1,24 +1,32 @@
 # CLAUDE.md — Kimi-Code-Plugin-CC
 
-This is a Claude Code plugin that bridges headless CLI agents (starting with Kimi
-Code) into Claude Code. It is built for scalability: add new agent adapters,
-review loops, and planning loops without changing the core.
+This is a Claude Code plugin that bridges headless CLI agents (starting with
+Kimi Code) into Claude Code as external subagents. Kimi Code is used as an
+**external reviewer / second opinion** for daily coding tasks. The design is
+scalable: add new agent adapters, review loops, and planning loops without
+changing the core. **Status: v1.0.0 — integration-ready, verified end-to-end
+on Windows.**
 
 ## Architecture
 
-- `src/kimi_code_plugin_cc/bridge/` — spawn and parse headless CLI output.
+- `src/kimi_code_plugin_cc/bridge/` — spawn and parse headless CLI output
+  (thread-backed `subprocess.run` with `stdin=DEVNULL` + `CREATE_NO_WINDOW` on
+  Windows to avoid the Proactor pipe-inheritance block).
 - `src/kimi_code_plugin_cc/protocol/` — Pydantic message schema with depth/bridge IDs.
-- `src/kimi_code_plugin_cc/agent_registry/` — adapter registry (Kimi, Codex skeleton).
+- `src/kimi_code_plugin_cc/agent_registry/` — adapter registry (`kimi` working,
+  `codex` skeleton raising `NotImplementedError` in v1.0).
 - `src/kimi_code_plugin_cc/security/` — approval policy, worktree isolation.
 - `src/kimi_code_plugin_cc/loops/` — planning, review, and santa-loop logic.
-- `src/kimi_code_plugin_cc/mcp_server.py` — MCP server exposing `run_agent`.
+- `src/kimi_code_plugin_cc/mcp_server.py` — MCP server exposing `run_agent`,
+  `run_review_loop`, `run_santa_loop`, `run_planning_loop`.
 - `skills/`, `agents/`, `commands/` — Claude Code plugin surface.
 
 ## Safety rules
 
 - Never spawn a CLI agent with `--yolo`/`--auto` unless explicitly approved.
+  These flags are structurally never injected by the adapter.
 - Default approval policy is `read-only`.
-- Every agent runs in an isolated worktree.
+- Every agent runs in an isolated worktree under the system temp dir.
 - Depth-guard prevents recursive agent swarms (`KIMI_BRIDGE_DEPTH`, default 2).
 - Policy escalation above `KIMI_MAX_POLICY` requires human approval.
 
@@ -28,3 +36,8 @@ review loops, and planning loops without changing the core.
 - Run tests: `uv run pytest`
 - Run lint/format: `uv run ruff check . && uv run ruff format .`
 - Start MCP server: `uv run kimi-code-plugin-mcp`
+
+## Verified against
+
+- Kimi Code CLI **0.20.1** (`kimi -p ... --output-format stream-json`).
+- Python ≥ 3.11.

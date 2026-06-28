@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import argparse
 import logging
-from typing import Any
 
 from mcp.server import FastMCP
 
 from kimi_code_plugin_cc.agent_registry import get
 from kimi_code_plugin_cc.loops import planning_loop, review_loop, santa_loop
-from kimi_code_plugin_cc.protocol.messages import AgentMessage
+from kimi_code_plugin_cc.protocol.messages import AgentMessage, to_adapter_context
 from kimi_code_plugin_cc.security.policy import resolve_effective_policy
 
 logger = logging.getLogger(__name__)
@@ -33,17 +32,27 @@ def create_server() -> FastMCP:
         Args:
             agent_name: Registered agent identifier, e.g. ``kimi``.
             prompt: The user prompt to forward to the agent.
-            approval_policy: Requested capability level. Capped by ``KIMI_MAX_POLICY``.
+            approval_policy: Requested capability level. Capped by
+                ``KIMI_MAX_POLICY``. In v1.0 only ``read-only`` is enforced;
+                any higher policy raises a structured error (the adapter
+                refuses it rather than recording an unenforced grant).
         """
         effective_policy = resolve_effective_policy(approval_policy)
         adapter = get(agent_name)
-        context: dict[str, Any] = {
-            "bridge_id": f"mcp-{agent_name}",
-            "depth": 0,
-            "approval_policy": effective_policy.to_string(),
-        }
-        message: AgentMessage = await adapter.run(prompt, context)
-        return message.payload
+        message: AgentMessage = AgentMessage(
+            bridge_id=f"mcp-{agent_name}",
+            depth=0,
+            approval_policy=effective_policy.to_string(),
+            payload=prompt,
+        )
+        context = to_adapter_context(message)
+        try:
+            response: AgentMessage = await adapter.run(prompt, context)
+        except PermissionError as exc:
+            # Structured, caller-friendly error instead of an opaque stack trace
+            # at the MCP boundary. v1.0 enforces read-only; escalation is refused.
+            return f"error: {exc}"
+        return response.payload
 
     @server.tool()
     async def run_review_loop(

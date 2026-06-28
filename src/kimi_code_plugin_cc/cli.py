@@ -9,7 +9,12 @@ from kimi_code_plugin_cc.mcp_server import main as mcp_main
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Dispatch to subcommands."""
+    """Dispatch to subcommands.
+
+    The ``mcp`` subcommand forwards its parsed ``--transport`` value explicitly
+    to :func:`mcp_main` (rather than relying on ``parse_known_args`` leftovers,
+    which would silently swallow the flag and fall back to ``stdio``).
+    """
     parser = argparse.ArgumentParser(
         prog="kimi-code-plugin",
         description="Claude Code plugin for headless CLI agents",
@@ -23,9 +28,9 @@ def main(argv: list[str] | None = None) -> int:
         default="stdio",
     )
 
-    args, mcp_extra = parser.parse_known_args(argv)
+    args = parser.parse_args(argv)
     if args.command == "mcp":
-        mcp_main(mcp_extra)
+        mcp_main(["--transport", args.transport])
         return 0
 
     parser.print_help()

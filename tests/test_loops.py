@@ -12,7 +12,7 @@ from kimi_code_plugin_cc.loops.planning import PlanResult, planning_loop
 from kimi_code_plugin_cc.loops.review import (
     ReviewResult,
     ReviewVerdict,
-    _extract_verdict,
+    extract_verdict,
     review_loop,
 )
 from kimi_code_plugin_cc.loops.santa import SantaResult, SantaVerdict, santa_loop
@@ -227,13 +227,13 @@ class TestVerdictExtraction:
     incidental mention of 'approve' as an approval, and disagreements must win."""
 
     def test_explicit_approve_still_matches(self) -> None:
-        assert _extract_verdict("Verdict: approve, looks good") == ReviewVerdict.APPROVE
+        assert extract_verdict("Verdict: approve, looks good") == ReviewVerdict.APPROVE
 
     def test_negated_approve_does_not_approve(self) -> None:
         # Regression: the old substring scan matched "approve" first and returned
         # APPROVE here, flipping a fail-closed loop toward green.
         assert (
-            _extract_verdict("I do not approve; request_changes needed for safety")
+            extract_verdict("I do not approve; request_changes needed for safety")
             == ReviewVerdict.REQUEST_CHANGES
         )
 
@@ -241,26 +241,26 @@ class TestVerdictExtraction:
         # "approval" contains the substring "approve" — a word-boundary scan must
         # not treat it as a verdict.
         assert (
-            _extract_verdict("approval workflow looks fine")
+            extract_verdict("approval workflow looks fine")
             == ReviewVerdict.NEEDS_DISCUSSION
         )
 
     def test_disagreement_wins_over_approve(self) -> None:
         assert (
-            _extract_verdict("approve overall, but request_changes for the edge case")
+            extract_verdict("approve overall, but request_changes for the edge case")
             == ReviewVerdict.REQUEST_CHANGES
         )
 
     def test_needs_discussion_matched(self) -> None:
-        assert _extract_verdict("needs_discussion: open questions remain") == (
+        assert extract_verdict("needs_discussion: open questions remain") == (
             ReviewVerdict.NEEDS_DISCUSSION
         )
 
     def test_unknown_text_defaults_to_needs_discussion(self) -> None:
-        assert _extract_verdict("the cake is a lie") == ReviewVerdict.NEEDS_DISCUSSION
+        assert extract_verdict("the cake is a lie") == ReviewVerdict.NEEDS_DISCUSSION
 
     def test_case_insensitive(self) -> None:
-        assert _extract_verdict("REQUEST_CHANGES") == ReviewVerdict.REQUEST_CHANGES
+        assert extract_verdict("REQUEST_CHANGES") == ReviewVerdict.REQUEST_CHANGES
 
 
 class TestLoopDepthConstancy:
@@ -337,20 +337,20 @@ class TestVerdictTolerance:
     """The parser tolerates spacing/inflection variants while staying fail-closed."""
 
     def test_request_changes_with_space(self) -> None:
-        assert _extract_verdict("please request changes here") == (
+        assert extract_verdict("please request changes here") == (
             ReviewVerdict.REQUEST_CHANGES
         )
 
     def test_needs_discussion_with_space(self) -> None:
-        assert _extract_verdict("this needs discussion first") == (
+        assert extract_verdict("this needs discussion first") == (
             ReviewVerdict.NEEDS_DISCUSSION
         )
 
     def test_approved_inflection_matches(self) -> None:
-        assert _extract_verdict("looks good, approved") == ReviewVerdict.APPROVE
+        assert extract_verdict("looks good, approved") == ReviewVerdict.APPROVE
 
     def test_approval_noun_still_not_approve(self) -> None:
         # Fail-closed guard must survive the more tolerant pattern.
-        assert _extract_verdict("the approval process is documented") == (
+        assert extract_verdict("the approval process is documented") == (
             ReviewVerdict.NEEDS_DISCUSSION
         )

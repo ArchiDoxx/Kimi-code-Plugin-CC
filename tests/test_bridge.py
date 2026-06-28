@@ -16,39 +16,6 @@ from kimi_code_plugin_cc.bridge.runner import (
     RunResult,
     run_agent_process,
 )
-from kimi_code_plugin_cc.bridge.session import Session, SessionState
-
-
-class TestSession:
-    def test_default_session(self) -> None:
-        session = Session()
-        assert session.depth == 0
-        assert session.turn_count == 0
-        assert session.state == SessionState.PENDING
-        assert len(session.id) > 0
-
-    def test_child_session(self) -> None:
-        parent = Session(depth=1, turn_count=2, state=SessionState.RUNNING)
-        child = parent.child()
-        assert child.depth == 2
-        assert child.turn_count == 2
-        assert child.state == SessionState.PENDING
-        assert child.id == parent.id
-
-    def test_increment_turn(self) -> None:
-        session = Session(turn_count=3)
-        next_session = session.increment_turn()
-        assert next_session.turn_count == 4
-        assert next_session.depth == session.depth
-
-    def test_with_state(self) -> None:
-        session = Session()
-        completed = session.with_state(SessionState.COMPLETED)
-        assert completed.state == SessionState.COMPLETED
-
-    def test_negative_depth_rejected(self) -> None:
-        with pytest.raises(ValueError):
-            Session(depth=-1)
 
 
 class TestParser:

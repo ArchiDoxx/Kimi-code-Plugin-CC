@@ -111,24 +111,35 @@ class TestKimiCodeAdapter:
         assert call_args.kwargs["max_depth"] == DEFAULT_MAX_DEPTH
 
     async def test_run_never_emits_auto_approve_flags(self) -> None:
-        """No policy may cause -y/--yolo/--auto/--afk to be injected."""
+        """No read-only policy may cause -y/--yolo/--auto/--afk to be injected.
+
+        v1.0 enforces read-only at the adapter boundary; higher policies raise
+        PermissionError rather than running, so we only exercise read-only here.
+        The escalation-refusal is covered by test_run_refuses_policy_escalation.
+        """
         adapter = KimiCodeAdapter()
-        for policy in ("read-only", "explicit", "accept-edits"):
+        with (
+            mock.patch(
+                f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock
+            ) as mock_run,
+            mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
+        ):
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {"depth": 0, "approval_policy": "read-only"})
+        argv = mock_run.call_args.args[0]
+        assert not any(flag in argv for flag in ("--yolo", "-y", "--auto", "--afk")), (
+            f"read-only policy leaked an auto-approve flag: {argv}"
+        )
+
+    async def test_run_refuses_policy_escalation(self) -> None:
+        """v1.0 refuses any effective policy above read-only (enforcement gap)."""
+        adapter = KimiCodeAdapter()
+        for policy in ("explicit", "accept-edits"):
             with (
-                mock.patch(
-                    f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock
-                ) as mock_run,
-                mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
                 mock.patch.dict(os.environ, {"KIMI_MAX_POLICY": "accept-edits"}),
+                pytest.raises(PermissionError, match="not supported in v1.0"),
             ):
-                mock_run.return_value = _run_result(
-                    stdout=json.dumps({"content": "ok"})
-                )
                 await adapter.run("prompt", {"depth": 0, "approval_policy": policy})
-            argv = mock_run.call_args.args[0]
-            assert not any(
-                flag in argv for flag in ("--yolo", "-y", "--auto", "--afk")
-            ), f"policy {policy} leaked an auto-approve flag: {argv}"
 
     async def test_run_raises_on_nonzero_exit(self) -> None:
         adapter = KimiCodeAdapter()
@@ -169,22 +180,23 @@ class TestKimiCodeAdapter:
         assert mock_run.call_args.kwargs["cwd"] is None
 
     async def test_run_respects_approval_policy(self) -> None:
+        """read-only is honored and recorded on the resulting message."""
         adapter = KimiCodeAdapter()
         with (
             mock.patch(
                 f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock
             ) as mock_run,
             mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
-            mock.patch.dict(os.environ, {"KIMI_MAX_POLICY": "accept-edits"}),
         ):
             mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
             result = await adapter.run(
                 "prompt",
-                {"bridge_id": "b1", "depth": 0, "approval_policy": "accept-edits"},
+                {"bridge_id": "b1", "depth": 0, "approval_policy": "read-only"},
             )
-        assert result.approval_policy == "accept-edits"
+        assert result.approval_policy == "read-only"
 
     async def test_run_caps_approval_policy(self) -> None:
+        """An unknown policy string falls back to read-only (the only enforced one)."""
         adapter = KimiCodeAdapter()
         with (
             mock.patch(
@@ -195,7 +207,7 @@ class TestKimiCodeAdapter:
             mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
             result = await adapter.run(
                 "prompt",
-                {"bridge_id": "b1", "depth": 0, "approval_policy": "accept-edits"},
+                {"bridge_id": "b1", "depth": 0, "approval_policy": "totally-bogus"},
             )
         assert result.approval_policy == "read-only"
 
