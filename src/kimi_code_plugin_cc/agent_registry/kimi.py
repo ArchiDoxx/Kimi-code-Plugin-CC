@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any, cast
@@ -40,6 +41,64 @@ EMPTY_RESPONSE_SENTINEL = "needs_discussion: agent returned no parseable output"
 # policy is enforced structurally (no flag) plus worktree isolation plus the
 # KIMI_MAX_POLICY ceiling; see ADR-002.
 NEVER_FLAGS = ("--yolo", "-y", "--auto", "--afk")
+
+
+# Regex to find a node entry-point (.mjs/.js) referenced inside a .cmd/.bat
+# npm shim. npm shims look like: ... "%dp0%\node_modules\<pkg>\dist\main.mjs" %*
+# We capture the path after the leading quote (optional) up to the extension.
+_SHIM_ENTRY_RE = re.compile(
+    r'["\']?(?P<path>(?:[A-Za-z]:[\\/]|[^"\']*?[\\/])?'
+    r'node_modules[\\/][^"\']+?\.(?:mjs|js|cjs))["\']?',
+    re.IGNORECASE,
+)
+
+
+def _deshim_cmd_wrapper(shim_path: Path) -> list[str] | None:
+    """Resolve a Windows ``.cmd``/``.bat`` npm shim to a direct ``node`` argv.
+
+    npm installs ``kimi.CMD`` (and similar) as batch shims that ultimately run
+    ``node <pkg>/dist/main.mjs %*`` through ``cmd.exe``. ``cmd.exe`` truncates
+    arguments at the first newline and caps lines near 8191 chars, which
+    silently breaks multi-line prompts.
+
+    This function reads the shim, locates the node entry-point (a
+    ``node_modules/.../*.mjs`` path, resolved relative to the shim's directory
+    if it uses ``%dp0%`` / ``%~dp0``), and returns ``["node", <abs entry>]``
+    so the caller can invoke node directly via ``CreateProcess``.
+
+    Returns ``None`` if *shim_path* is not a ``.cmd``/``.bat`` file or no
+    entry-point could be resolved — callers then fall back to running the
+    shim as-is (single-line behaviour stays correct).
+    """
+    if shim_path.suffix.lower() not in (".cmd", ".bat"):
+        return None
+    try:
+        text = shim_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    match = _SHIM_ENTRY_RE.search(text)
+    if match is None:
+        return None
+
+    raw_path = match.group("path")
+    # Resolve npm's %dp0% / %~dp0 (the shim's own directory) if the path is
+    # relative to node_modules at the shim's location.
+    entry = Path(raw_path)
+    if not entry.is_absolute():
+        # Strip a possible leading %dp0%-style prefix or backslash.
+        cleaned = re.sub(r"^[%~dpDP0\\\/]+", "", raw_path)
+        entry = (shim_path.parent / cleaned).resolve()
+    else:
+        entry = entry.resolve()
+
+    if not entry.exists():
+        return None
+
+    # Prefer a node.exe next to the shim (npm layout), else rely on PATH.
+    local_node = shim_path.parent / "node.exe"
+    node_exec = str(local_node) if local_node.exists() else "node"
+    return [node_exec, str(entry)]
 
 
 class KimiCodeAdapter(AgentAdapter):
@@ -141,7 +200,21 @@ class KimiCodeAdapter(AgentAdapter):
         return result
 
     def _resolve_executable(self, command: list[str]) -> list[str]:
-        """Resolve the first argument via PATH so Windows finds .cmd wrappers."""
+        """Resolve the first argument, de-shimming Windows ``.cmd``/``.bat`` wrappers.
+
+        ``shutil.which("kimi")`` returns ``kimi.CMD`` on Windows — an npm
+        batch shim that ``cmd.exe`` executes. ``cmd.exe`` truncates every
+        argument at the first ``\\n`` and caps lines near 8191 chars, which
+        silently destroys multi-line prompts (every review/plan brief). The
+        shim ultimately runs ``node <pkg>/dist/main.mjs %*``.
+
+        To preserve newlines (and long prompts), we parse the shim, locate its
+        node entry-point (a ``.mjs``/``.js`` path relative to the shim dir),
+        and invoke ``node <entry> ...`` directly via ``CreateProcess`` (which
+        handles ``\\n`` and ~32767-char args correctly). If anything fails, we
+        fall back to the original resolved path so single-line behaviour keeps
+        working.
+        """
         if not command:
             return command
         executable = shutil.which(command[0])
@@ -149,6 +222,9 @@ class KimiCodeAdapter(AgentAdapter):
             raise FileNotFoundError(
                 f"Could not find executable for {command[0]!r} in PATH"
             )
+        deshimed = _deshim_cmd_wrapper(Path(executable))
+        if deshimed is not None:
+            return [*deshimed, *command[1:]]
         return [executable, *command[1:]]
 
     def _resolve_workdir(self) -> Path | None:
