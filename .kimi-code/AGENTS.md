@@ -11,6 +11,66 @@ _No key facts recorded yet._
 
 ## Recent Activity
 
+### 🐛 Bash: uv run ruff check . && uv run pytest -v
+Used Bash: uv run ruff check . && uv run pytest -v → E501 Line too long (89 > 88)
+**Files:** [, ], [
+
+### 🐛 Read: src/kimi_code_plugin_cc/security/policy.py
+Used Read: src/kimi_code_plugin_cc/security/policy.py → 1 """Approval-policy enforcement and worktree isolation.
+**Files:** [, ], [
+
+### 🔍 Bash: uv run ruff format src/kimi_code_plugin_cc/agent_r...
+Used Bash: uv run ruff format src/kimi_code_plugin_cc/agent_r... → Would reformat: src\kimi_code_plugin_cc\agent_registry\__init__.py
+**Files:** [, ], [
+
+### 🔍 Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re...
+Used Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re... → All checks passed!
+**Files:** [, ], [
+
+### 🐛 Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re...
+Used Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re... → I001 [*] Import block is un-sorted or un-formatted
+**Files:** [, ], [
+
+### 🔍 Read: src/kimi_code_plugin_cc/agent_registry/__init__.py
+Used Read: src/kimi_code_plugin_cc/agent_registry/__init__.py → 1 """Agent registry for headless CLI adapters."""
+**Files:** [, ], [
+
+### 🔍 Read: src/kimi_code_plugin_cc/agent_registry/kimi.py
+Used Read: src/kimi_code_plugin_cc/agent_registry/kimi.py → 1 """Adapter for the Kimi Code CLI."""
+**Files:** [, ], [
+
+### 🐛 Bash: uv run ruff check . && uv run pytest tests/test_ag...
+Used Bash: uv run ruff check . && uv run pytest tests/test_ag... → F401 `typing.Any` imported but unused
+**Files:** [, ], [
+
+### 🔍 Bash: find src tests -type f -name '*.py' | sort
+Used Bash: find src tests -type f -name '*.py' | sort → src/kimi_code_plugin_cc/__init__.py
+**Files:** [, ], [
+
+### 🔍 Read: src/kimi_code_plugin_cc/__init__.py
+Used Read: src/kimi_code_plugin_cc/__init__.py → 1 """Kimi Code plugin for Claude Code — headless CLI agent bridge."""
+**Files:** [, ], [
+
+### 🔍 Write: src/kimi_code_plugin_cc/protocol/__init__.py
+Used Write: src/kimi_code_plugin_cc/protocol/__init__.py → Wrote 192 bytes to src/kimi_code_plugin_cc/protocol/__init__.py
+**Files:** [, ], [
+
+### 🔍 Write: src/kimi_code_plugin_cc/protocol/messages.py
+Used Write: src/kimi_code_plugin_cc/protocol/messages.py → Wrote 1319 bytes to src/kimi_code_plugin_cc/protocol/messages.py
+**Files:** [, ], [
+
+### 🔍 Write: src/kimi_code_plugin_cc/agent_registry/base.py
+Used Write: src/kimi_code_plugin_cc/agent_registry/base.py → Wrote 787 bytes to src/kimi_code_plugin_cc/agent_registry/base.py
+**Files:** [, ], [
+
+### 🔍 Edit: tests/test_agent_registry.py
+Used Edit: tests/test_agent_registry.py → Replaced 1 occurrence in tests/test_agent_registry.py
+**Files:** [, ], [
+
+### 🐛 Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && r...
+Used Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && r... → All checks passed!
+**Files:** [, ], [
+
 ### 🔍 Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim...
 Used Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim... → 1 """Bridge layer for spawning and parsing headless agent output."""
 **Files:** [, ], [
@@ -31,66 +91,6 @@ Used Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && u... → 2
 Used Edit: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim... → Replaced 1 occurrence in C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kimi_code_p...
 **Files:** [, ], [
 
-### 🔍 Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim...
-Used Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim... → 1 """Pydantic message models for the Kimi Code plugin bridge protocol.
-**Files:** [, ], [
-
-### 🐛 Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && u...
-Used Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && u... → Found 3 errors (3 fixed, 0 remaining).
-**Files:** [, ], [
-
-### 🐛 Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && u...
-Used Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && u... → F401 [*] `os` imported but unused
-**Files:** [, ], [
-
-### 🐛 Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && u...
-Used Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && u... → All checks passed!
-**Files:** [, ], [
-
-### 🔍 Edit: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/t...
-Used Edit: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/t... → Replaced 1 occurrence in C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/test_secu...
-**Files:** [, ], [
-
-### 🔍 Write: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim...
-Used Write: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim... → Wrote 314 bytes to C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kimi_code_plugin...
-**Files:** [, ], [
-
-### 🔍 Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim...
-Used Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim... → 1 """Adapter for the Kimi Code CLI."""
-**Files:** [, ], [
-
-### 🐛 Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim...
-Used Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim... → 1 """Approval-policy enforcement and worktree isolation.
-**Files:** [, ], [
-
-### 🔍 Edit: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/t...
-Used Edit: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/t... → Replaced 1 occurrence in C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/test_prot...
-**Files:** [, ], [
-
-### 🐛 Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && u...
-Used Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && u... → ============================= test session starts =============================
-**Files:** [, ], [
-
-### 🔍 Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && g...
-Used Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && g... → M README.md
-**Files:** [, ], [
-
-### 🔍 Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && f...
-Used Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && f... → src/kimi_code_plugin_cc/__init__.py
-**Files:** [, ], [
-
-### 🔍 Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim...
-Used Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim... → 1 """Kimi Code plugin for Claude Code — headless CLI agent bridge."""
-**Files:** [, ], [
-
-### 🔍 Write: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim...
-Used Write: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim... → Wrote 334 bytes to C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kimi_code_plugin...
-**Files:** [, ], [
-
-### 🔍 Write: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/t...
-Used Write: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/t... → Wrote 2898 bytes to C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/test_protocol...
-**Files:** [, ], [
-
 ---
 
-*Auto-generated by kimi-mneme v2.0.24 | 28 observations*
+*Auto-generated by kimi-mneme v2.0.24 | 43 observations*
