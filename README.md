@@ -5,8 +5,9 @@ Claude Code as first-class subagents — so you can use Kimi Code as an **extern
 reviewer** for daily coding tasks (`/kimi-code-review`, `/kimi-opinion`) plus
 structured review/planning/adversarial loops.
 
-**Status: v1.2.0 — integration-ready, verified end-to-end on Windows
-(sentinel-based completion + multi-provider model selection).**
+**Status: v1.3.0 — integration-ready, verified end-to-end on Windows
+(sentinel-based completion + multi-provider model selection, now with a
+per-call `[<model>]` bracket selector on every slash command).**
 See [CHANGELOG.md](CHANGELOG.md) for the technical release log.
 
 ## Features
@@ -21,6 +22,8 @@ See [CHANGELOG.md](CHANGELOG.md) for the technical release log.
   `model` parameter (a model alias from the CLI's own config, passed as
   `kimi -m`), so runs can be routed to any configured provider/model
   (Kimi, GLM, …). Model values are validated so they can never inject flags.
+  On the slash-command surface, append the alias in square brackets —
+  `/kimi-code-review src/foo.py [glm-4.6]` — to pick the model per call.
 - Extensible agent registry: `kimi` (working adapter), `codex` (skeleton, raises
   `NotImplementedError` in v1.0 — present only to validate the abstraction).
 - Single async execution path: adapters `await` one shared, depth-guarded
@@ -45,10 +48,16 @@ See [CHANGELOG.md](CHANGELOG.md) for the technical release log.
 
 | Command | Purpose |
 |---|---|
-| `/kimi-code-review <target>` | Focused single-pass external code review (daily workhorse). |
-| `/kimi-opinion "<question>" [--file <path>]` | Quick external second opinion on a design decision. |
-| `/kimi-run [agent] "<prompt>" [--model <alias>]` | One-off prompt to a registered agent (default `kimi`), optionally on a specific model. |
-| `/kimi-review <target> [--loop review\|santa] [--agent <name>]` | Iterative or adversarial dual-review loop. |
+| `/kimi-code-review <target> [<model>]` | Focused single-pass external code review (daily workhorse). |
+| `/kimi-opinion "<question>" [--file <path>] [<model>]` | Quick external second opinion on a design decision. |
+| `/kimi-run [agent] "<prompt>" [<model>]` | One-off prompt to a registered agent (default `kimi`), optionally on a specific model. |
+| `/kimi-review <target> [--loop review\|santa] [--agent <name>] [<model>]` | Iterative or adversarial dual-review loop. |
+
+`[<model>]` is an optional trailing bracket selector: write a model alias from
+the agent CLI's own config in square brackets at the end of the command, e.g.
+`/kimi-code-review src/foo.py [glm-4.6]`, to route that call to a specific
+provider/model. `--model <alias>` works too. Omitted = the CLI's default model.
+See [Model selection](#model-selection-multi-provider).
 
 ## Skills
 
@@ -60,6 +69,16 @@ See [CHANGELOG.md](CHANGELOG.md) for the technical release log.
 | `review-loop` | loop | Multi-round refinement against the same target. |
 | `santa-loop` | loop | Fail-closed adversarial dual-review (two reviewers must agree). |
 | `planning-loop` | loop | Iterative plan creation/refinement. |
+| `contract-audit` | audit (single-pass) | Frozen API/data-model contract vs implementation — drift, missing pieces, fail-safe gaps. |
+| `seam-design-review` | audit (single-pass) | Proposed module boundary/interface — coupling direction, deep-module quality, leaks. |
+| `fail-safe-audit` | audit (single-pass) | Every failure/stale/fault path checked for safe-state behavior. |
+| `test-gap-audit` | audit (single-pass) | Audits the *tests* for missing cases (edge, error, fail-safe, documented incidents). |
+
+The four audit skills are role-specific lenses (architect / backend dev) that
+complement the generic skills: each ships a structured brief the generic
+skills do not. They have no slash command — call
+`mcp__kimi-code-plugin-cc__run_agent` with the brief from the skill, and
+escalate safety-critical sign-offs to `santa-loop`.
 
 ## Prerequisites
 
@@ -102,9 +121,11 @@ Verify with `/plugin list` (should show `kimi-code-plugin-cc`) and
 
 ```
 /kimi-code-review src/myfile.py        # focused external code review
+/kimi-code-review src/myfile.py [glm-4.6]  # same review on a specific model
 /kimi-opinion "Should I use an ORM or raw SQL here?"  # quick second opinion
 /kimi-run "Explain the bridge module"  # one-off prompt to Kimi
 /kimi-review src/myfile.py --loop santa  # adversarial dual-review (fail-closed)
+/kimi-review src/myfile.py --loop santa [zai-coding-plan/glm-5.2]  # …on GLM
 ```
 
 ## MCP server
@@ -148,6 +169,12 @@ mcp__kimi-code-plugin-cc__run_agent(
   model="zai-coding-plan/glm-5.2",
 )
 ```
+
+On the slash-command surface the same routing is available as a trailing
+bracket selector — `/kimi-code-review src/foo.py [zai-coding-plan/glm-5.2]` —
+on all four commands. Loose names like `[GLM 4.6]` are normalized to the
+alias form (`glm-4.6`) before the call; the adapter rejects anything that
+does not match the alias charset.
 
 ## Configuration (environment variables)
 

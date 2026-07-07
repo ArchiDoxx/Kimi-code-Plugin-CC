@@ -24,15 +24,18 @@ iterative planning (use `planning-loop`).
 **Slash command (preferred):**
 
 ```
-/kimi-opinion "<question>"
+/kimi-opinion "<question>" [<model-alias>]
 ```
 
 Optionally include context: `/kimi-opinion "<question>" --file <path>` — the
 command reads the file and includes its contents so the agent has the real
-code, not just a description.
+code, not just a description. A trailing bracketed token like `[glm-4.6]`
+routes the question to that model alias from the agent CLI's own config;
+omitted = the CLI's default model.
 
 **MCP tool directly:** call `mcp__kimi-code-plugin-cc__run_agent` with
-`agent_name="kimi"` and a prompt built from the template below.
+`agent_name="kimi"`, a prompt built from the template below, and optionally
+`model="<alias>"`.
 
 ## The opinion brief (what gets sent)
 
@@ -73,4 +76,5 @@ the user plainly — do not dress it up as a decision.
 ```
 /kimi-opinion "Should this bridge use asyncio.create_subprocess_exec or subprocess.run?"
 /kimi-opinion "Is the depth-guard sufficient or should I add a semaphore too?" --file src/kimi_code_plugin_cc/bridge/runner.py
+/kimi-opinion "Repository pattern or raw SQL for this module?" [glm-4.6]
 ```

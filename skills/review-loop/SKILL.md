@@ -24,8 +24,12 @@ reviewers must agree, use `santa-loop`.
 **Slash command:**
 
 ```
-/kimi-review <target> --loop review [--agent <name>]
+/kimi-review <target> --loop review [--agent <name>] [<model-alias>]
 ```
+
+A trailing bracketed token like `[glm-4.6]` routes **every round** of the loop
+to that model alias from the agent CLI's own config; omitted = the CLI's
+default model.
 
 **MCP tool:**
 
@@ -33,7 +37,8 @@ reviewers must agree, use `santa-loop`.
 mcp__kimi-code-plugin-cc__run_review_loop(
   agent_name="kimi",     # default reviewer
   target="<code or description>",  # pass CONTENTS, not a path
-  max_iterations=3       # default
+  max_iterations=3,      # default
+  model="glm-4.6"        # optional; omitted = CLI default
 )
 ```
 

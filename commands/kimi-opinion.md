@@ -1,6 +1,6 @@
 ---
 description: Quick external second opinion from Kimi Code on a design decision, approach, or trade-off. Decisive, trade-off-aware answer in one shot.
-argument-hint: "<question>" [--file <path>]
+argument-hint: "<question>" [--file <path>] [<model-alias>]
 allowed-tools: mcp__kimi-code-plugin-cc__run_agent, Read
 ---
 
@@ -11,6 +11,12 @@ Arguments (raw): `$ARGUMENTS`
 Do the following:
 
 1. Parse `$ARGUMENTS`:
+   - Model selector (optional): a trailing standalone bracketed token like
+     `[glm-4.6]` or `[zai-coding-plan/glm-5.2]` selects a model alias from the
+     agent CLI's own config (for kimi: `~/.kimi-code/config.toml`). Strip it
+     from the question. Aliases must match `[A-Za-z0-9][A-Za-z0-9._:/-]*` (no
+     whitespace); normalize loose names like `[GLM 4.6]` → `glm-4.6` and state
+     which alias you passed. `--model <alias>` is equivalent.
    - `--file <path>`: if present, **Read that file** and include its contents as
      context. Remove the flag and the path from the question.
    - The rest is the user's question.
@@ -42,8 +48,15 @@ Do the following:
    - `agent_name`: `kimi`
    - `prompt`: the opinion brief
    - `approval_policy`: `read-only`
+   - `model`: only when a model selector was given in step 1 (omitted = the
+     CLI's default model)
 4. Return the agent's answer. If it hedged or gave no clear recommendation, say
    so plainly rather than fabricating a decision.
+
+Examples:
+- `/kimi-opinion "Repository pattern or raw SQL here?"` — default model.
+- `/kimi-opinion "Repository pattern or raw SQL here?" [glm-4.6]` — routed to
+  the `glm-4.6` alias.
 
 Safety:
 - `read-only` policy. Never pass `--yolo` / `--auto`.

@@ -41,10 +41,14 @@ Two ways to supply reviewer #2:
 ## How to use
 
 ```
-/kimi-review <target> --loop santa
+/kimi-review <target> --loop santa [<model-alias>]
 ```
 
-`<target>` is a file path (the command reads it) or inline code.
+`<target>` is a file path (the command reads it) or inline code. A trailing
+bracketed token like `[zai-coding-plan/glm-5.2]` routes both **external**
+reviewers (primary and adversary) to that model alias from the agent CLI's
+own config; Claude's own heterogeneous review is unaffected. Omitted = the
+CLI's default model.
 
 ## Returns
 
