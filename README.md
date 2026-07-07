@@ -5,7 +5,9 @@ Claude Code as first-class subagents — so you can use Kimi Code as an **extern
 reviewer** for daily coding tasks (`/kimi-code-review`, `/kimi-opinion`) plus
 structured review/planning/adversarial loops.
 
-**Status: v1.0.0 — integration-ready, verified end-to-end on Windows.**
+**Status: v1.2.0 — integration-ready, verified end-to-end on Windows
+(sentinel-based completion + multi-provider model selection).**
+See [CHANGELOG.md](CHANGELOG.md) for the technical release log.
 
 ## Features
 
@@ -45,7 +47,7 @@ structured review/planning/adversarial loops.
 |---|---|
 | `/kimi-code-review <target>` | Focused single-pass external code review (daily workhorse). |
 | `/kimi-opinion "<question>" [--file <path>]` | Quick external second opinion on a design decision. |
-| `/kimi-run [agent] "<prompt>"` | One-off prompt to a registered agent (default `kimi`). |
+| `/kimi-run [agent] "<prompt>" [--model <alias>]` | One-off prompt to a registered agent (default `kimi`), optionally on a specific model. |
 | `/kimi-review <target> [--loop review\|santa] [--agent <name>]` | Iterative or adversarial dual-review loop. |
 
 ## Skills
@@ -116,15 +118,36 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} kimi-code-plugin-mcp
 
 The server exposes four tools:
 
-- `run_agent(agent_name, prompt, approval_policy="read-only")` — one-shot run.
-- `run_review_loop(agent_name, target, max_iterations=3)` — iterative review.
-- `run_santa_loop(primary_agent, target, max_iterations=3)` — fail-closed
-  adversarial dual-review.
-- `run_planning_loop(agent_name, prompt, max_iterations=3)` — iterative plan.
+- `run_agent(agent_name, prompt, approval_policy="read-only", model=None)` —
+  one-shot run.
+- `run_review_loop(agent_name, target, max_iterations=3, model=None)` —
+  iterative review.
+- `run_santa_loop(primary_agent, target, max_iterations=3, model=None)` —
+  fail-closed adversarial dual-review (the model applies to both reviewers).
+- `run_planning_loop(agent_name, prompt, max_iterations=3, model=None)` —
+  iterative plan.
 
 `approval_policy` is capped against the `KIMI_MAX_POLICY` environment variable.
 For review/planning, pass file **contents** as the target/prompt: the agent runs
 in an isolated worktree and cannot open arbitrary host paths.
+
+### Model selection (multi-provider)
+
+`model` is a model alias from the **agent CLI's own config** — for kimi, an
+alias defined in `~/.kimi-code/config.toml`, e.g. `zai-coding-plan/glm-5.2` or
+`moonshot-ai/kimi-k2.6`. It is passed through as `kimi -m <alias>`, so any
+provider/model you configure in the CLI works immediately; the plugin holds no
+model list of its own. Omitted, the CLI's `default_model` applies. Values are
+validated against `[A-Za-z0-9][A-Za-z0-9._:/-]*`, so a model value can never
+smuggle a CLI flag into the argv.
+
+```
+mcp__kimi-code-plugin-cc__run_agent(
+  agent_name="kimi",
+  prompt="Review this diff …",
+  model="zai-coding-plan/glm-5.2",
+)
+```
 
 ## Configuration (environment variables)
 
@@ -160,6 +183,17 @@ in an isolated worktree and cannot open arbitrary host paths.
 ```bash
 uv run pytest
 uv run pytest --cov=kimi_code_plugin_cc --cov-report=term-missing
+```
+
+**After a Kimi CLI update:** the plugin is deliberately not pinned to a CLI
+version — it depends only on a small public flag surface (`-p`,
+`--output-format stream-json`, `-m`). `tests/test_cli_contract.py` pins that
+surface against the real `kimi --help` output (it skips automatically when the
+CLI is absent). The opt-in live tests exercise the full transport:
+
+```bash
+uv run pytest tests/test_cli_contract.py   # cheap contract check
+uv run pytest -m live                      # full live round-trip (spawns kimi)
 ```
 
 ## License
