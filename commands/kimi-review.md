@@ -1,18 +1,18 @@
 ---
-description: Review a target with a single-agent loop, or an adversarial dual-review (santa) where Claude is the heterogeneous second reviewer.
+description: Review a target with a single-agent loop, or an adversarial dual-review (santa) where Claude is the heterogeneous second reviewer. For a single fast pass use /kimi-code-review instead.
 argument-hint: <target> [--loop review|santa] [--agent <name>]
 allowed-tools: mcp__kimi-code-plugin-cc__run_review_loop, mcp__kimi-code-plugin-cc__run_santa_loop, Read
 ---
 
-Review a target artifact through the bridge.
+Review a target artifact through an iterative or adversarial loop.
 
 Arguments (raw): `$ARGUMENTS`
 
-Steps:
+Do the following:
 
 1. Parse arguments:
    - `target`: everything that is not a flag. If it looks like a file path,
-     Read the file and use its contents as the target text (so the external
+     **Read the file** and use its contents as the target text (so the external
      agent gets the code, not just a path it cannot open in its worktree).
    - `--loop`: `review` (default) or `santa`.
    - `--agent`: primary reviewer (default `kimi`).
@@ -22,8 +22,8 @@ Steps:
    - For `santa`: call `mcp__kimi-code-plugin-cc__run_santa_loop` with
      `primary_agent`, `target`, `max_iterations=3`. Note: this MCP tool uses an
      external adversary as reviewer #2. For a TRUE heterogeneous dual-review,
-     after the tool returns, independently review the same target YOURSELF
-     (Claude) and only report an overall `green` if BOTH your verdict and the
+     after the tool returns, **independently review the same target YOURSELF
+     (Claude)** and only report an overall `green` if BOTH your verdict and the
      tool's verdict are approve. Otherwise report fail-closed (`red`).
 3. Parse the returned JSON and summarise: verdict, iterations, and the key
    findings. Quote concrete issues.
@@ -33,3 +33,4 @@ Safety:
 - Default approval policy is `read-only`.
 - If the agent returns the no-output sentinel (`needs_discussion: agent
   returned no parseable output`), treat it as fail-safe, not approval.
+- For a single fast review pass (no loop), use `/kimi-code-review` instead.

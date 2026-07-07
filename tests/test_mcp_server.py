@@ -49,6 +49,39 @@ class StubAdapter(AgentAdapter):
         )
 
 
+class RecordingAdapter(AgentAdapter):
+    """Records the call context so tests can assert MCP-level plumbing."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self.contexts: list[dict[str, Any]] = []
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def run(self, prompt: str, context: dict[str, Any]) -> AgentMessage:
+        self.contexts.append(context)
+        return AgentMessage(
+            bridge_id=context.get("bridge_id", ""),
+            payload="ok",
+        )
+
+
+class ValueErrorAdapter(AgentAdapter):
+    """Raises ValueError like the real adapter does for an invalid model."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def run(self, prompt: str, context: dict[str, Any]) -> AgentMessage:
+        raise ValueError("Invalid model alias '--yolo'")
+
+
 @pytest.fixture
 def echo_adapter() -> EchoAdapter:
     adapter = EchoAdapter("echo")
@@ -102,6 +135,38 @@ async def test_run_agent_unknown_agent_raises(echo_adapter: EchoAdapter) -> None
             "run_agent",
             {"agent_name": "missing", "prompt": "hello"},
         )
+
+
+async def test_run_agent_forwards_model_into_context() -> None:
+    adapter = RecordingAdapter("rec-model")
+    register("rec-model", adapter)
+    server = create_server()
+    await server.call_tool(
+        "run_agent",
+        {"agent_name": "rec-model", "prompt": "p", "model": "glm-4.6"},
+    )
+    assert adapter.contexts[0]["model"] == "glm-4.6"
+
+
+async def test_run_agent_without_model_omits_context_key() -> None:
+    adapter = RecordingAdapter("rec-no-model")
+    register("rec-no-model", adapter)
+    server = create_server()
+    await server.call_tool(
+        "run_agent",
+        {"agent_name": "rec-no-model", "prompt": "p"},
+    )
+    assert "model" not in adapter.contexts[0]
+
+
+async def test_run_agent_returns_structured_error_on_invalid_model() -> None:
+    register("rec-bad-model", ValueErrorAdapter("rec-bad-model"))
+    server = create_server()
+    content, _meta = await server.call_tool(
+        "run_agent",
+        {"agent_name": "rec-bad-model", "prompt": "p", "model": "--yolo"},
+    )
+    assert content[0].text.startswith("error: Invalid model alias")
 
 
 async def test_run_review_loop_tool_returns_approve() -> None:

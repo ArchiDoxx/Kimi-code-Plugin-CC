@@ -1,36 +1,55 @@
 ---
 name: planning-loop
-description: Iteratively build or refine a plan with an external CLI agent, refining up to a max-iteration budget. Use when a task needs a structured plan before implementation.
+description: Iteratively build or refine a plan with an external agent, refining up to a max-iteration budget. Use when a complex task needs a structured plan from a second perspective before implementation.
 ---
 
-# planning-loop
+# planning-loop — iterative external planning
 
-Use this skill when a task needs a structured plan before implementation.
+Use this when a task needs a **structured plan** and you want an external agent
+to build and refine it before you implement. The first iteration creates a
+plan; later iterations refine it. Stops early if a refinement round returns the
+same plan (convergence).
 
 ## When to use
 
-- Breaking down a complex feature.
-- Comparing implementation options.
-- Creating a step-by-step execution plan.
+- Breaking down a complex feature before coding.
+- Comparing implementation options with a second perspective.
+- Getting an external agent's step-by-step execution plan.
+
+For a quick design opinion (not a full plan), use `second-opinion`.
 
 ## How to use
 
-Call the MCP tool `mcp__kimi-code-plugin-cc__run_planning_loop` with:
+**MCP tool:**
 
-- `agent_name`: registered agent to use (default `kimi`).
-- `prompt`: the task description.
-- `max_iterations`: maximum refinement rounds (default 3).
+```
+mcp__kimi-code-plugin-cc__run_planning_loop(
+  agent_name="kimi",
+  prompt="<task description>",
+  max_iterations=3
+)
+```
 
-The first iteration asks the agent to create a plan; each later iteration asks
-it to refine the previous plan. The loop always returns the final plan, with
-`status` = `max_iterations` when the budget is exhausted.
+There is no dedicated slash command for planning — call the MCP tool directly,
+or use `/kimi-run` with a planning-style prompt for a single-pass plan.
+
+If the task references files, include their **contents** in the prompt — the
+agent runs in an isolated worktree and cannot open host paths.
 
 ## Returns
 
-JSON: `plan`, `iterations`, `status`, `final_message`.
+JSON: `plan`, `iterations`, `status` (`complete` | `max_iterations`),
+`final_message`.
+
+- `complete` — the plan converged (a refinement round returned the same plan).
+- `max_iterations` — the budget was exhausted; the last plan is returned.
 
 ## Example
 
-Call `mcp__kimi-code-plugin-cc__run_planning_loop` with
-`agent_name="kimi"`, `prompt="Design the storage module for sensor readings"`,
-`max_iterations=3`.
+```
+mcp__kimi-code-plugin-cc__run_planning_loop(
+  agent_name="kimi",
+  prompt="Design the storage module for sensor readings with a repository pattern and raw SQL. The schema must support stale detection.",
+  max_iterations=3
+)
+```

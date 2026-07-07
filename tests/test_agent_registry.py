@@ -17,19 +17,26 @@ from kimi_code_plugin_cc.agent_registry import (
 )
 from kimi_code_plugin_cc.agent_registry.base import AgentAdapter
 from kimi_code_plugin_cc.agent_registry.codex import CodexAdapter
+from kimi_code_plugin_cc.agent_registry.kimi import is_resume_hint_event
 from kimi_code_plugin_cc.bridge.runner import RunResult
 from kimi_code_plugin_cc.protocol.messages import DEFAULT_MAX_DEPTH, AgentMessage
 
 KIMI_MODULE = "kimi_code_plugin_cc.agent_registry.kimi"
 
 
-def _run_result(stdout: str = "", stderr: str = "", returncode: int = 0) -> RunResult:
+def _run_result(
+    stdout: str = "",
+    stderr: str = "",
+    returncode: int = 0,
+    early_exit: bool = False,
+) -> RunResult:
     return RunResult(
         returncode=returncode,
         stdout=stdout,
         stderr=stderr,
         args=[],
         env={},
+        early_exit=early_exit,
     )
 
 
@@ -111,24 +118,35 @@ class TestKimiCodeAdapter:
         assert call_args.kwargs["max_depth"] == DEFAULT_MAX_DEPTH
 
     async def test_run_never_emits_auto_approve_flags(self) -> None:
-        """No policy may cause -y/--yolo/--auto/--afk to be injected."""
+        """No read-only policy may cause -y/--yolo/--auto/--afk to be injected.
+
+        v1.0 enforces read-only at the adapter boundary; higher policies raise
+        PermissionError rather than running, so we only exercise read-only here.
+        The escalation-refusal is covered by test_run_refuses_policy_escalation.
+        """
         adapter = KimiCodeAdapter()
-        for policy in ("read-only", "explicit", "accept-edits"):
+        with (
+            mock.patch(
+                f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock
+            ) as mock_run,
+            mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
+        ):
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {"depth": 0, "approval_policy": "read-only"})
+        argv = mock_run.call_args.args[0]
+        assert not any(flag in argv for flag in ("--yolo", "-y", "--auto", "--afk")), (
+            f"read-only policy leaked an auto-approve flag: {argv}"
+        )
+
+    async def test_run_refuses_policy_escalation(self) -> None:
+        """v1.0 refuses any effective policy above read-only (enforcement gap)."""
+        adapter = KimiCodeAdapter()
+        for policy in ("explicit", "accept-edits"):
             with (
-                mock.patch(
-                    f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock
-                ) as mock_run,
-                mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
                 mock.patch.dict(os.environ, {"KIMI_MAX_POLICY": "accept-edits"}),
+                pytest.raises(PermissionError, match="not supported in v1.0"),
             ):
-                mock_run.return_value = _run_result(
-                    stdout=json.dumps({"content": "ok"})
-                )
                 await adapter.run("prompt", {"depth": 0, "approval_policy": policy})
-            argv = mock_run.call_args.args[0]
-            assert not any(
-                flag in argv for flag in ("--yolo", "-y", "--auto", "--afk")
-            ), f"policy {policy} leaked an auto-approve flag: {argv}"
 
     async def test_run_raises_on_nonzero_exit(self) -> None:
         adapter = KimiCodeAdapter()
@@ -156,6 +174,126 @@ class TestKimiCodeAdapter:
         assert cwd is not None
         assert "kimi_worktree_" in str(cwd)
 
+    async def test_run_passes_completion_check_to_runner(self) -> None:
+        """Kimi prints its answer but may never exit (global MCP servers keep
+        the event loop alive), so the adapter must hand the runner a completion
+        sentinel instead of relying on process exit."""
+        adapter = KimiCodeAdapter()
+        with (
+            mock.patch(
+                f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock
+            ) as mock_run,
+            mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
+        ):
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        assert mock_run.call_args.kwargs["early_exit_check"] is is_resume_hint_event
+
+    async def test_early_exit_result_with_nonzero_code_is_not_failure(self) -> None:
+        """When the sentinel completed the run, the child was reaped by the
+        bridge — its exit code is meaningless and must not raise."""
+        adapter = KimiCodeAdapter()
+        stdout = json.dumps({"role": "assistant", "content": "OK"})
+        with (
+            mock.patch(
+                f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock
+            ) as mock_run,
+            mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
+        ):
+            mock_run.return_value = _run_result(
+                stdout=stdout, returncode=1, early_exit=True
+            )
+            result = await adapter.run("prompt", {})
+        assert result.payload == "OK"
+
+
+class TestResumeHintEvent:
+    def test_matches_real_resume_hint_event(self) -> None:
+        line = json.dumps(
+            {
+                "role": "meta",
+                "type": "session.resume_hint",
+                "session_id": "session_abc",
+                "content": "To resume this session: kimi -r session_abc",
+            }
+        )
+        assert is_resume_hint_event(line) is True
+
+    def test_ignores_assistant_content_mentioning_the_hint(self) -> None:
+        line = json.dumps(
+            {"role": "assistant", "content": 'docs about "session.resume_hint"'}
+        )
+        assert is_resume_hint_event(line) is False
+
+    def test_ignores_plain_text_containing_marker(self) -> None:
+        assert is_resume_hint_event("session.resume_hint but not json") is False
+
+    def test_ignores_unrelated_json_cheaply(self) -> None:
+        line = json.dumps({"role": "assistant", "content": "hi"})
+        assert is_resume_hint_event(line) is False
+
+
+class TestModelSelection:
+    """The CLI's -m/--model alias must be pluggable per call (multi-provider
+    setups route different providers through config.toml aliases) and must be
+    structurally injection-safe (a model value can never become a flag)."""
+
+    def _mocks(self):
+        return (
+            mock.patch(f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock),
+            mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
+        )
+
+    async def test_model_from_context_lands_in_argv(self) -> None:
+        adapter = KimiCodeAdapter()
+        run_patch, which_patch = self._mocks()
+        with run_patch as mock_run, which_patch:
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {"model": "glm-4.6"})
+        argv = mock_run.call_args.args[0]
+        assert argv[argv.index("-m") + 1] == "glm-4.6"
+
+    async def test_without_model_no_flag_is_emitted(self) -> None:
+        adapter = KimiCodeAdapter()
+        run_patch, which_patch = self._mocks()
+        with run_patch as mock_run, which_patch:
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        assert "-m" not in mock_run.call_args.args[0]
+
+    async def test_constructor_default_model_is_used(self) -> None:
+        adapter = KimiCodeAdapter(model="kimi-for-coding")
+        run_patch, which_patch = self._mocks()
+        with run_patch as mock_run, which_patch:
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        argv = mock_run.call_args.args[0]
+        assert argv[argv.index("-m") + 1] == "kimi-for-coding"
+
+    async def test_context_model_overrides_constructor_default(self) -> None:
+        adapter = KimiCodeAdapter(model="kimi-for-coding")
+        run_patch, which_patch = self._mocks()
+        with run_patch as mock_run, which_patch:
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {"model": "glm-4.6"})
+        argv = mock_run.call_args.args[0]
+        assert argv[argv.index("-m") + 1] == "glm-4.6"
+
+    @pytest.mark.parametrize(
+        "bad_model",
+        ["--yolo", "-m", "glm 4.6", "", 'x"y', "a\nb", "-leading-dash"],
+    )
+    async def test_invalid_model_is_rejected_before_spawn(self, bad_model: str) -> None:
+        adapter = KimiCodeAdapter()
+        run_patch, which_patch = self._mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            pytest.raises(ValueError, match="model"),
+        ):
+            await adapter.run("prompt", {"model": bad_model})
+        mock_run.assert_not_called()
+
     async def test_run_can_disable_worktree(self) -> None:
         adapter = KimiCodeAdapter(use_isolated_worktree=False)
         with (
@@ -169,22 +307,23 @@ class TestKimiCodeAdapter:
         assert mock_run.call_args.kwargs["cwd"] is None
 
     async def test_run_respects_approval_policy(self) -> None:
+        """read-only is honored and recorded on the resulting message."""
         adapter = KimiCodeAdapter()
         with (
             mock.patch(
                 f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock
             ) as mock_run,
             mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
-            mock.patch.dict(os.environ, {"KIMI_MAX_POLICY": "accept-edits"}),
         ):
             mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
             result = await adapter.run(
                 "prompt",
-                {"bridge_id": "b1", "depth": 0, "approval_policy": "accept-edits"},
+                {"bridge_id": "b1", "depth": 0, "approval_policy": "read-only"},
             )
-        assert result.approval_policy == "accept-edits"
+        assert result.approval_policy == "read-only"
 
     async def test_run_caps_approval_policy(self) -> None:
+        """An unknown policy string falls back to read-only (the only enforced one)."""
         adapter = KimiCodeAdapter()
         with (
             mock.patch(
@@ -195,7 +334,7 @@ class TestKimiCodeAdapter:
             mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
             result = await adapter.run(
                 "prompt",
-                {"bridge_id": "b1", "depth": 0, "approval_policy": "accept-edits"},
+                {"bridge_id": "b1", "depth": 0, "approval_policy": "totally-bogus"},
             )
         assert result.approval_policy == "read-only"
 

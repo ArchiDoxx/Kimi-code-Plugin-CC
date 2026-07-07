@@ -6,11 +6,9 @@ from kimi_code_plugin_cc.bridge.runner import (
     assert_spawn_allowed,
     run_agent_process,
 )
-from kimi_code_plugin_cc.bridge.session import Session
 
 __all__ = [
     "RunResult",
-    "Session",
     "assert_spawn_allowed",
     "parse_stream_json",
     "run_agent_process",

@@ -1,34 +1,57 @@
 ---
 name: review-loop
-description: Run an external agent in an iterative review loop that returns a verdict (approve / request_changes / needs_discussion) and stops early on approval. Use for code or design review by a headless CLI agent.
+description: Multi-round external code review that iterates up to a max-iteration budget, stopping early on 'approve'. Use when one review pass is not enough and you want the reviewer to refine its findings against the same target.
 ---
 
-# review-loop
+# review-loop — iterative external review
 
-Use this skill to get structured feedback on code, a design, or any target artifact from an external CLI agent.
+Use this when a **single** review pass (`code-review`) is not enough and you
+want the external reviewer to **refine** its findings over multiple rounds
+against the same target. The loop stops early on `approve`; otherwise it
+returns the last review.
 
 ## When to use
 
-- Code review before committing.
-- Design review for a module or API.
-- Checking a document or plan for issues.
+- The target is subtle and one pass may miss issues.
+- You want the reviewer to reconsider after seeing its own first draft.
+- You do NOT need two independent reviewers (that's `santa-loop`).
 
-For high-stakes paths where two independent reviewers must agree, use
-`santa-loop` instead.
+For a single fast pass, use `code-review`. For safety-critical paths where two
+reviewers must agree, use `santa-loop`.
 
 ## How to use
 
-- Slash command: `/kimi-review <target> --loop review [--agent <name>]`
-- MCP tool directly: call `mcp__kimi-code-plugin-cc__run_review_loop` with
-  `agent_name` (default `kimi`), `target`, and `max_iterations` (default 3).
+**Slash command:**
 
-If the target is a file, pass its **contents** (not just the path): the agent
-runs in an isolated worktree and cannot open arbitrary host paths. The
-`/kimi-review` command reads the file for you.
+```
+/kimi-review <target> --loop review [--agent <name>]
+```
 
-The loop asks for a verdict + comments and stops early on `approve`; otherwise
-it returns the last review, defaulting to `needs_discussion` when no verdict can
-be parsed.
+**MCP tool:**
+
+```
+mcp__kimi-code-plugin-cc__run_review_loop(
+  agent_name="kimi",     # default reviewer
+  target="<code or description>",  # pass CONTENTS, not a path
+  max_iterations=3       # default
+)
+```
+
+If the target is a file, **Read it first** and pass its **contents** as
+`target`. The agent runs in an isolated worktree and cannot open host paths.
+The `/kimi-review` command does this for you.
+
+## Verdict semantics (fail-closed)
+
+Each round, the reviewer's text is parsed for a verdict:
+
+- `approve` → loop stops, returns `approve`.
+- `request_changes` → another round (if budget left).
+- `needs_discussion` → another round (if budget left).
+- **nothing parseable** → defaults to `needs_discussion` (never `approve`).
+
+Non-approve verdicts take precedence — an ambiguous review never reads as
+approval.
 
 ## Returns
 
@@ -37,5 +60,5 @@ JSON: `review`, `verdict`, `iterations`, `final_message`.
 ## Example
 
 ```
-/kimi-review src/kimi_code_plugin_cc/bridge/runner.py --loop review
+/kimi-review src/kimi_code_plugin_cc/security/policy.py --loop review
 ```

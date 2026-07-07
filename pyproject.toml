@@ -1,6 +1,6 @@
 [project]
 name = "kimi-code-plugin-cc"
-version = "0.5.1"
+version = "1.2.0"
 description = "Claude Code plugin for headless CLI-agent communication via Kimi Code"
 readme = "README.md"
 license = { text = "MIT" }
@@ -38,6 +38,9 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "live: tests that spawn the real, authenticated kimi CLI (opt-in via -m live)",
+]
 
 [tool.coverage.run]
 source = ["src/kimi_code_plugin_cc"]
