@@ -26,6 +26,7 @@ def create_server() -> FastMCP:
         agent_name: str,
         prompt: str,
         approval_policy: str = "read-only",
+        model: str | None = None,
     ) -> str:
         """Run a registered agent with *prompt* and return its payload.
 
@@ -36,6 +37,10 @@ def create_server() -> FastMCP:
                 ``KIMI_MAX_POLICY``. In v1.0 only ``read-only`` is enforced;
                 any higher policy raises a structured error (the adapter
                 refuses it rather than recording an unenforced grant).
+            model: Optional model alias from the agent CLI's own config (for
+                kimi: a config.toml alias, passed as ``kimi -m``). Lets
+                multi-provider setups route a run to e.g. a GLM model.
+                Omitted: the CLI's default model applies.
         """
         effective_policy = resolve_effective_policy(approval_policy)
         adapter = get(agent_name)
@@ -45,12 +50,13 @@ def create_server() -> FastMCP:
             approval_policy=effective_policy.to_string(),
             payload=prompt,
         )
-        context = to_adapter_context(message)
+        context = to_adapter_context(message, model=model)
         try:
             response: AgentMessage = await adapter.run(prompt, context)
-        except PermissionError as exc:
+        except (PermissionError, ValueError) as exc:
             # Structured, caller-friendly error instead of an opaque stack trace
-            # at the MCP boundary. v1.0 enforces read-only; escalation is refused.
+            # at the MCP boundary: policy escalation is refused (v1.0 enforces
+            # read-only) and an invalid model alias is rejected by the adapter.
             return f"error: {exc}"
         return response.payload
 
@@ -59,6 +65,7 @@ def create_server() -> FastMCP:
         agent_name: str,
         target: str,
         max_iterations: int = 3,
+        model: str | None = None,
     ) -> str:
         """Run a single-agent review loop over *target* and return a verdict.
 
@@ -69,8 +76,11 @@ def create_server() -> FastMCP:
             agent_name: Registered reviewer agent, e.g. ``kimi``.
             target: File path, code block, or description to review.
             max_iterations: Maximum review rounds (default 3).
+            model: Optional model alias (agent CLI config) for every round.
         """
-        result = await review_loop(agent_name, target, max_iterations=max_iterations)
+        result = await review_loop(
+            agent_name, target, max_iterations=max_iterations, model=model
+        )
         return result.model_dump_json(indent=2)
 
     @server.tool()
@@ -78,6 +88,7 @@ def create_server() -> FastMCP:
         primary_agent: str,
         target: str,
         max_iterations: int = 3,
+        model: str | None = None,
     ) -> str:
         """Run an adversarial dual-review and return a fail-closed verdict.
 
@@ -93,8 +104,11 @@ def create_server() -> FastMCP:
             primary_agent: Registered adapter for the primary review.
             target: The artifact to review.
             max_iterations: Maximum rounds before fail-closed ``red`` (default 3).
+            model: Optional model alias (agent CLI config) for both reviewers.
         """
-        result = await santa_loop(primary_agent, target, max_iterations=max_iterations)
+        result = await santa_loop(
+            primary_agent, target, max_iterations=max_iterations, model=model
+        )
         return result.model_dump_json(indent=2)
 
     @server.tool()
@@ -102,6 +116,7 @@ def create_server() -> FastMCP:
         agent_name: str,
         prompt: str,
         max_iterations: int = 3,
+        model: str | None = None,
     ) -> str:
         """Iteratively build or refine a plan with an external agent.
 
@@ -109,8 +124,11 @@ def create_server() -> FastMCP:
             agent_name: Registered agent to use, e.g. ``kimi``.
             prompt: Task description to plan.
             max_iterations: Maximum refinement rounds (default 3).
+            model: Optional model alias (agent CLI config) for every round.
         """
-        result = await planning_loop(agent_name, prompt, max_iterations=max_iterations)
+        result = await planning_loop(
+            agent_name, prompt, max_iterations=max_iterations, model=model
+        )
         return result.model_dump_json(indent=2)
 
     return server

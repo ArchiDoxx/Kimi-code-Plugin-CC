@@ -49,7 +49,9 @@ def increment_depth(message: AgentMessage) -> AgentMessage:
     return message.model_copy(update={"depth": message.depth + 1})
 
 
-def to_adapter_context(message: AgentMessage) -> dict[str, Any]:
+def to_adapter_context(
+    message: AgentMessage, model: str | None = None
+) -> dict[str, Any]:
     """Build the adapter call context from a message.
 
     Adapters (e.g. :class:`KimiCodeAdapter`) read ``bridge_id``, ``depth`` and
@@ -57,12 +59,19 @@ def to_adapter_context(message: AgentMessage) -> dict[str, Any]:
     under ``{"message": ...}``, so a real adapter silently fell back to defaults
     (losing the conversation ``bridge_id`` and the requested policy). This is the
     single canonical contract shared by the loops and the MCP ``run_agent`` tool.
+
+    ``model`` (optional) is the per-call model alias for multi-provider setups;
+    it is added as a top-level key only when set, so adapters can distinguish
+    "no preference" from an explicit choice.
     """
-    return {
+    context: dict[str, Any] = {
         "bridge_id": message.bridge_id,
         "depth": message.depth,
         "approval_policy": message.approval_policy,
     }
+    if model is not None:
+        context["model"] = model
+    return context
 
 
 def is_depth_allowed(message: AgentMessage | int, max_depth: int) -> bool:

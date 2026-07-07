@@ -55,3 +55,17 @@ mcp__kimi-code-plugin-cc__run_agent(
   prompt="Explain the depth-guard in this code:\n\n<contents of runner.py>"
 )
 ```
+
+With an explicit model alias (multi-provider setups; alias must exist in the
+agent CLI's own config, e.g. `~/.kimi-code/config.toml`):
+
+```
+mcp__kimi-code-plugin-cc__run_agent(
+  agent_name="kimi",
+  prompt="...",
+  model="zai-coding-plan/glm-5.2"
+)
+```
+
+The loop tools (`run_review_loop`, `run_santa_loop`, `run_planning_loop`)
+accept the same optional `model` parameter.

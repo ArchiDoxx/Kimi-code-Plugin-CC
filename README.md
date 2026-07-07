@@ -15,6 +15,10 @@ structured review/planning/adversarial loops.
   dual-review, fail-closed), `planning-loop` (iterative plan refinement).
 - Spawn Kimi Code headlessly via `kimi -p ... --output-format stream-json`
   (verified against `@moonshot-ai/kimi-code` **0.22.2**).
+- **Multi-provider model selection**: every MCP tool takes an optional
+  `model` parameter (a model alias from the CLI's own config, passed as
+  `kimi -m`), so runs can be routed to any configured provider/model
+  (Kimi, GLM, …). Model values are validated so they can never inject flags.
 - Extensible agent registry: `kimi` (working adapter), `codex` (skeleton, raises
   `NotImplementedError` in v1.0 — present only to validate the abstraction).
 - Single async execution path: adapters `await` one shared, depth-guarded

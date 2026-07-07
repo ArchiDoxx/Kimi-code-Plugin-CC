@@ -132,6 +132,7 @@ async def _secondary_review(
     iteration: int,
     adversary_agent: str,
     host_reviewer: HostReviewer | None,
+    model: str | None = None,
 ) -> ReviewResult:
     """Obtain the independent second review.
 
@@ -146,9 +147,12 @@ async def _secondary_review(
             result = await result
         return result
     adapter = get(adversary_agent)
+    adversary_context: dict[str, Any] = {"loop": "santa", "role": "adversary"}
+    if model is not None:
+        adversary_context["model"] = model
     response = await adapter.run(
         _adversarial_prompt(target, primary_review),
-        context={"loop": "santa", "role": "adversary"},
+        context=adversary_context,
     )
     return _to_review_result(response, iteration)
 
@@ -171,6 +175,7 @@ async def santa_loop(
     *,
     adversary_agent: str | None = None,
     host_reviewer: HostReviewer | None = None,
+    model: str | None = None,
 ) -> SantaResult:
     """Run an adversarial dual-review loop.
 
@@ -192,6 +197,9 @@ async def santa_loop(
             callback (sync or async). When provided it is used as the
             (heterogeneous) second reviewer instead of an external adapter —
             this is how the skill layer wires Claude itself as reviewer #2.
+        model: Optional per-call model alias for multi-provider setups.
+            Forwarded to the primary reviewer and (when no host reviewer is
+            wired) to the external adversary as well.
     """
     if max_iterations < 1:
         raise ValueError("max_iterations must be at least 1")
@@ -213,13 +221,18 @@ async def santa_loop(
     for iteration in range(1, max_iterations + 1):
         response = await adapter.run(
             message.payload,
-            context=to_adapter_context(message),
+            context=to_adapter_context(message, model=model),
         )
         primary_review = _to_review_result(response, iteration)
         last_primary = primary_review
 
         secondary_review = await _secondary_review(
-            target, primary_review, iteration, resolved_adversary, host_reviewer
+            target,
+            primary_review,
+            iteration,
+            resolved_adversary,
+            host_reviewer,
+            model=model,
         )
         last_secondary = secondary_review
 

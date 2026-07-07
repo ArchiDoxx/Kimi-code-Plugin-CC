@@ -232,6 +232,68 @@ class TestResumeHintEvent:
         line = json.dumps({"role": "assistant", "content": "hi"})
         assert is_resume_hint_event(line) is False
 
+
+class TestModelSelection:
+    """The CLI's -m/--model alias must be pluggable per call (multi-provider
+    setups route different providers through config.toml aliases) and must be
+    structurally injection-safe (a model value can never become a flag)."""
+
+    def _mocks(self):
+        return (
+            mock.patch(f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock),
+            mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
+        )
+
+    async def test_model_from_context_lands_in_argv(self) -> None:
+        adapter = KimiCodeAdapter()
+        run_patch, which_patch = self._mocks()
+        with run_patch as mock_run, which_patch:
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {"model": "glm-4.6"})
+        argv = mock_run.call_args.args[0]
+        assert argv[argv.index("-m") + 1] == "glm-4.6"
+
+    async def test_without_model_no_flag_is_emitted(self) -> None:
+        adapter = KimiCodeAdapter()
+        run_patch, which_patch = self._mocks()
+        with run_patch as mock_run, which_patch:
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        assert "-m" not in mock_run.call_args.args[0]
+
+    async def test_constructor_default_model_is_used(self) -> None:
+        adapter = KimiCodeAdapter(model="kimi-for-coding")
+        run_patch, which_patch = self._mocks()
+        with run_patch as mock_run, which_patch:
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        argv = mock_run.call_args.args[0]
+        assert argv[argv.index("-m") + 1] == "kimi-for-coding"
+
+    async def test_context_model_overrides_constructor_default(self) -> None:
+        adapter = KimiCodeAdapter(model="kimi-for-coding")
+        run_patch, which_patch = self._mocks()
+        with run_patch as mock_run, which_patch:
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {"model": "glm-4.6"})
+        argv = mock_run.call_args.args[0]
+        assert argv[argv.index("-m") + 1] == "glm-4.6"
+
+    @pytest.mark.parametrize(
+        "bad_model",
+        ["--yolo", "-m", "glm 4.6", "", 'x"y', "a\nb", "-leading-dash"],
+    )
+    async def test_invalid_model_is_rejected_before_spawn(self, bad_model: str) -> None:
+        adapter = KimiCodeAdapter()
+        run_patch, which_patch = self._mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            pytest.raises(ValueError, match="model"),
+        ):
+            await adapter.run("prompt", {"model": bad_model})
+        mock_run.assert_not_called()
+
     async def test_run_can_disable_worktree(self) -> None:
         adapter = KimiCodeAdapter(use_isolated_worktree=False)
         with (

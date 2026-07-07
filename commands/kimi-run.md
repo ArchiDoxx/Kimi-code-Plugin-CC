@@ -1,6 +1,6 @@
 ---
 description: Run a single prompt through a registered headless CLI agent (Kimi by default) via the bridge MCP server. Lowest-overhead one-shot call.
-argument-hint: [agent-name] "<prompt>"
+argument-hint: [agent-name] "<prompt>" [--model <alias>]
 allowed-tools: mcp__kimi-code-plugin-cc__run_agent, Read
 ---
 
@@ -15,6 +15,9 @@ Do the following:
      is followed by a quoted string, treat it as the agent name and the rest as
      the prompt. Otherwise the agent name is `kimi` and the whole of
      `$ARGUMENTS` is the prompt.
+   - An optional `--model <alias>` anywhere in the arguments selects a model
+     alias from the agent CLI's own config (multi-provider setups, e.g. a GLM
+     alias like `zai-coding-plan/glm-5.2`). Remove it from the prompt text.
 2. If the prompt references a file, **Read the file** and include its contents
    in the prompt. The agent runs in an isolated worktree and cannot open host
    paths.
@@ -23,6 +26,7 @@ Do the following:
    - `prompt`: the resolved prompt
    - `approval_policy`: `read-only` (do NOT raise this unless the user
      explicitly asked and is authorized; the server caps it at `KIMI_MAX_POLICY`)
+   - `model`: only when `--model` was given (omitted = the CLI's default model)
 4. Return the agent's payload verbatim, then add a one-line note of which agent
    and policy were used.
 

@@ -332,6 +332,38 @@ class TestLoopAdapterContract:
         ctx = stub.contexts[0]
         assert set(ctx) >= {"bridge_id", "depth", "approval_policy"}
 
+    async def test_review_loop_forwards_model(self) -> None:
+        stub = ContractRecordingStub("model-review", "needs_discussion")
+        register("model-review", stub)
+        await review_loop("model-review", "target", max_iterations=1, model="glm-4.6")
+        assert stub.contexts[0]["model"] == "glm-4.6"
+
+    async def test_review_loop_without_model_omits_key(self) -> None:
+        stub = ContractRecordingStub("model-review-none", "needs_discussion")
+        register("model-review-none", stub)
+        await review_loop("model-review-none", "target", max_iterations=1)
+        assert "model" not in stub.contexts[0]
+
+    async def test_planning_loop_forwards_model(self) -> None:
+        stub = ContractRecordingStub("model-plan", "a plan")
+        register("model-plan", stub)
+        await planning_loop("model-plan", "task", max_iterations=1, model="glm-4.6")
+        assert stub.contexts[0]["model"] == "glm-4.6"
+
+    async def test_santa_loop_forwards_model_to_both_reviewers(self) -> None:
+        stub = ContractRecordingStub("model-santa", "request_changes")
+        register("model-santa", stub)
+        await santa_loop(
+            "model-santa",
+            "target",
+            max_iterations=1,
+            adversary_agent="model-santa",
+            model="glm-4.6",
+        )
+        # Primary review + adversarial second review, both on the same stub.
+        assert len(stub.contexts) == 2
+        assert all(ctx.get("model") == "glm-4.6" for ctx in stub.contexts)
+
 
 class TestVerdictTolerance:
     """The parser tolerates spacing/inflection variants while staying fail-closed."""

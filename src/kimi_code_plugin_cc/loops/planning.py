@@ -70,12 +70,16 @@ async def planning_loop(
     agent_name: str,
     prompt: str,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
+    model: str | None = None,
 ) -> PlanResult:
     """Run a planning agent iteratively up to *max_iterations* times.
 
     The first iteration asks the agent to create a plan; subsequent iterations
     ask it to refine the previous plan. The loop always returns the final plan
     produced, even if the iteration budget is exhausted.
+
+    ``model`` (optional) selects a per-call model alias for multi-provider
+    setups; it is forwarded to the adapter on every iteration.
     """
     if max_iterations < 1:
         raise ValueError("max_iterations must be at least 1")
@@ -96,7 +100,7 @@ async def planning_loop(
     for iteration in range(1, max_iterations + 1):
         response = await adapter.run(
             message.payload,
-            context=to_adapter_context(message),
+            context=to_adapter_context(message, model=model),
         )
         last_response = response
         previous_plan = current_plan

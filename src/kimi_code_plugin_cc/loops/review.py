@@ -160,12 +160,16 @@ async def review_loop(
     agent_name: str,
     target: str,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
+    model: str | None = None,
 ) -> ReviewResult:
     """Run an external reviewer iteratively up to *max_iterations* times.
 
     The loop stops early if the reviewer approves. Otherwise it returns the
     last review produced, with a verdict defaulting to ``needs_discussion``
     when none can be parsed.
+
+    ``model`` (optional) selects a per-call model alias for multi-provider
+    setups; it is forwarded to the adapter on every iteration.
     """
     if max_iterations < 1:
         raise ValueError("max_iterations must be at least 1")
@@ -185,7 +189,7 @@ async def review_loop(
     for iteration in range(1, max_iterations + 1):
         response = await adapter.run(
             message.payload,
-            context=to_adapter_context(message),
+            context=to_adapter_context(message, model=model),
         )
         last_response = response
         result = _build_result(response, iteration)

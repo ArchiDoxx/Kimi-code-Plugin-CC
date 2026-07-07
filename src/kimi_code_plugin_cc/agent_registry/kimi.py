@@ -49,6 +49,23 @@ NEVER_FLAGS = ("--yolo", "-y", "--auto", "--afk")
 # memory kimi-review-timeout-non-exit).
 _RESUME_HINT_TYPE = "session.resume_hint"
 
+# Model aliases (multi-provider setups route providers through config.toml
+# aliases like "glm-4.6" or "kimi-for-coding"). The charset is conservative
+# and the first character must be alphanumeric, so a model value can never
+# smuggle a CLI flag into the argv — same structural posture as NEVER_FLAGS.
+_MODEL_ALIAS_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
+
+
+def _validate_model_alias(model: str) -> str:
+    """Return *model* if it is a safe CLI model alias, else raise ValueError."""
+    if not isinstance(model, str) or _MODEL_ALIAS_RE.fullmatch(model) is None:
+        raise ValueError(
+            f"Invalid model alias {model!r}: expected a config.toml alias "
+            "matching [A-Za-z0-9][A-Za-z0-9._:/-]* (no leading '-', no "
+            "whitespace or quotes)"
+        )
+    return model
+
 
 def is_resume_hint_event(line: str) -> bool:
     """Return True when *line* is Kimi's terminal ``session.resume_hint`` event.
@@ -144,11 +161,15 @@ class KimiCodeAdapter(AgentAdapter):
         worktree: Path | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         use_isolated_worktree: bool = True,
+        model: str | None = None,
     ) -> None:
         self._name = name
         self._worktree = worktree
         self._timeout = timeout
         self._use_isolated_worktree = use_isolated_worktree
+        # Default model alias for every run; a per-call ``model`` context key
+        # overrides it. None lets kimi use default_model from config.toml.
+        self._model = model
 
     @property
     def name(self) -> str:
@@ -160,8 +181,11 @@ class KimiCodeAdapter(AgentAdapter):
         depth = int(ctx.get("depth", 0))
         bridge_id = str(ctx.get("bridge_id", self._name))
         policy = self._resolve_policy(ctx)
+        model = ctx.get("model", self._model)
+        if model is not None:
+            model = _validate_model_alias(model)
 
-        command = self._build_command(prompt)
+        command = self._build_command(prompt, model)
         result = await self._execute(command, depth)
         payload = self._parse_output(result.stdout)
         if not payload.strip():
@@ -176,15 +200,23 @@ class KimiCodeAdapter(AgentAdapter):
             payload=payload,
         )
 
-    def _build_command(self, prompt: str) -> list[str]:
-        """Construct the Kimi Code argv list without auto-approve flags."""
-        return [
+    def _build_command(self, prompt: str, model: str | None = None) -> list[str]:
+        """Construct the Kimi Code argv list without auto-approve flags.
+
+        ``model`` must already be validated by :func:`_validate_model_alias`;
+        when set it is passed as ``-m <alias>`` so multi-provider setups can
+        route a run to a specific provider/model from config.toml.
+        """
+        command = [
             KIMI_EXECUTABLE,
             "-p",
             prompt,
             "--output-format",
             STREAM_OUTPUT_FORMAT,
         ]
+        if model is not None:
+            command += ["-m", model]
+        return command
 
     async def _execute(self, command: list[str], depth: int) -> RunResult:
         """Delegate the actual spawn to the shared async runner.
