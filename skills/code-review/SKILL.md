@@ -25,13 +25,17 @@ agree — use `santa-loop` instead. For multi-round iterative refinement, use
 **Slash command (preferred):**
 
 ```
-/kimi-code-review <target>
+/kimi-code-review <target> [<model-alias>]
 ```
 
 `<target>` is a file path (the command reads it for you) or inline code.
+A trailing bracketed token like `[glm-4.6]` routes the review to that model
+alias from the agent CLI's own config (multi-provider setups); omitted = the
+CLI's default model.
 
 **MCP tool directly:** call `mcp__kimi-code-plugin-cc__run_agent` with
-`agent_name="kimi"` and a prompt built from the template below.
+`agent_name="kimi"`, a prompt built from the template below, and optionally
+`model="<alias>"`.
 
 ## The review brief (what gets sent)
 
@@ -72,4 +76,5 @@ items for the user and quote the concrete fixes.
 
 ```
 /kimi-code-review src/kimi_code_plugin_cc/bridge/runner.py
+/kimi-code-review src/kimi_code_plugin_cc/bridge/runner.py [glm-4.6]
 ```

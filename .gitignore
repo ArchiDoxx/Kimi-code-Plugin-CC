@@ -9,3 +9,4 @@ dist/
 .kimi-code/
 .claude/
 kimi_worktree_*/
+.worktrees/

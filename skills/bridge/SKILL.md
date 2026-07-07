@@ -19,10 +19,12 @@ answer back.
 
 Two equivalent entry points:
 
-- **Slash command:** `/kimi-run [agent-name] "<prompt>"`
+- **Slash command:** `/kimi-run [agent-name] "<prompt>" [<model-alias>]` —
+  a trailing bracketed token like `[glm-4.6]` (or `--model <alias>`) routes
+  the run to that model alias from the agent CLI's own config.
 - **MCP tool directly:** `mcp__kimi-code-plugin-cc__run_agent` with
-  `agent_name` (default `kimi`), `prompt`, and optional
-  `approval_policy` (default `read-only`).
+  `agent_name` (default `kimi`), `prompt`, optional
+  `approval_policy` (default `read-only`), and optional `model`.
 
 If the prompt references a file, **Read the file first** and include its
 **contents** in the prompt. The agent runs in an isolated worktree and cannot

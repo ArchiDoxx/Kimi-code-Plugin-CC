@@ -4,6 +4,45 @@ Technical release log for `kimi-code-plugin-cc`. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver and
 match `.claude-plugin/plugin.json` / `pyproject.toml`.
 
+## [1.3.0] — 2026-07-07
+
+Bracket model selector on the slash-command surface; four role-specific
+audit skills.
+
+### Added
+
+- Four **audit skills** (single-pass, no new MCP tools, no slash commands):
+  `contract-audit` (frozen contract vs implementation drift),
+  `seam-design-review` (proposed module boundary/interface),
+  `fail-safe-audit` (every failure/stale/fault path vs safe-state invariant),
+  `test-gap-audit` (missing test cases — edge, error, fail-safe, documented
+  incidents). Role-specific briefs that complement the six generic skills;
+  safety-critical sign-offs escalate to `santa-loop`. Built in a parallel
+  worktree, integrated flattened to `skills/<name>/` (nested skill dirs are
+  not discovered by the plugin loader) and stripped of project-specific
+  references.
+
+- Trailing `[<model-alias>]` selector on all four slash commands
+  (`/kimi-code-review`, `/kimi-opinion`, `/kimi-run`, `/kimi-review`):
+  `/kimi-code-review src/foo.py [glm-4.6]` routes that call to the `glm-4.6`
+  alias from the agent CLI's own config. Parsed at the command layer and
+  passed as the existing `model` parameter (v1.2.0) of the MCP tools — no
+  Python changes. `--model <alias>` remains equivalent on every command.
+- Loose names (`[GLM 4.6]`) are normalized to alias form (`glm-4.6`) before
+  the call and the substitution is stated; final validation stays in the
+  adapter (`[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}`), so the bracket syntax
+  cannot bypass the flag-injection guard.
+- Brackets that are part of inline code (e.g. `x[i]`) are explicitly excluded
+  from selector parsing; for `/kimi-review --loop santa` the selector applies
+  to both external reviewers, never to the host (Claude) review.
+- Skills (`code-review`, `second-opinion`, `bridge`, `review-loop`,
+  `santa-loop`, `planning-loop`) and README document the new syntax.
+
+### Changed
+
+- Markdown-only release: commands, skills, README, version metadata. The
+  Python package is unchanged apart from the version bump.
+
 ## [1.2.0] — 2026-07-07
 
 Multi-provider model selection.

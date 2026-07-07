@@ -4,7 +4,7 @@ This is a Claude Code plugin that bridges headless CLI agents (starting with
 Kimi Code) into Claude Code as external subagents. Kimi Code is used as an
 **external reviewer / second opinion** for daily coding tasks. The design is
 scalable: add new agent adapters, review loops, and planning loops without
-changing the core. **Status: v1.1.0 — integration-ready, verified end-to-end
+changing the core. **Status: v1.3.0 — integration-ready, verified end-to-end
 on Windows.**
 
 ## Architecture

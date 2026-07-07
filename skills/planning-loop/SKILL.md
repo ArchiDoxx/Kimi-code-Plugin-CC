@@ -26,12 +26,14 @@ For a quick design opinion (not a full plan), use `second-opinion`.
 mcp__kimi-code-plugin-cc__run_planning_loop(
   agent_name="kimi",
   prompt="<task description>",
-  max_iterations=3
+  max_iterations=3,
+  model="glm-4.6"   # optional alias from the agent CLI's config; omitted = CLI default
 )
 ```
 
 There is no dedicated slash command for planning — call the MCP tool directly,
-or use `/kimi-run` with a planning-style prompt for a single-pass plan.
+or use `/kimi-run` with a planning-style prompt for a single-pass plan
+(`/kimi-run` supports the same trailing `[<model-alias>]` selector).
 
 If the task references files, include their **contents** in the prompt — the
 agent runs in an isolated worktree and cannot open host paths.

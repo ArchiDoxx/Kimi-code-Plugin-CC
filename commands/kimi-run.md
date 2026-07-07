@@ -1,6 +1,6 @@
 ---
 description: Run a single prompt through a registered headless CLI agent (Kimi by default) via the bridge MCP server. Lowest-overhead one-shot call.
-argument-hint: [agent-name] "<prompt>" [--model <alias>]
+argument-hint: [agent-name] "<prompt>" [--model <alias> | [<model-alias>]]
 allowed-tools: mcp__kimi-code-plugin-cc__run_agent, Read
 ---
 
@@ -18,6 +18,12 @@ Do the following:
    - An optional `--model <alias>` anywhere in the arguments selects a model
      alias from the agent CLI's own config (multi-provider setups, e.g. a GLM
      alias like `zai-coding-plan/glm-5.2`). Remove it from the prompt text.
+   - Equivalent shorthand: a trailing standalone bracketed token like
+     `[glm-4.6]` after the prompt selects the same way. Strip it from the
+     prompt. Aliases must match `[A-Za-z0-9][A-Za-z0-9._:/-]*` (no
+     whitespace); normalize loose names like `[GLM 4.6]` → `glm-4.6` and
+     state which alias you passed. Do NOT treat brackets inside the quoted
+     prompt text as a model selector.
 2. If the prompt references a file, **Read the file** and include its contents
    in the prompt. The agent runs in an isolated worktree and cannot open host
    paths.
@@ -26,7 +32,8 @@ Do the following:
    - `prompt`: the resolved prompt
    - `approval_policy`: `read-only` (do NOT raise this unless the user
      explicitly asked and is authorized; the server caps it at `KIMI_MAX_POLICY`)
-   - `model`: only when `--model` was given (omitted = the CLI's default model)
+   - `model`: only when `--model` or a bracketed `[<alias>]` was given
+     (omitted = the CLI's default model)
 4. Return the agent's payload verbatim, then add a one-line note of which agent
    and policy were used.
 
