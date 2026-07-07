@@ -17,19 +17,26 @@ from kimi_code_plugin_cc.agent_registry import (
 )
 from kimi_code_plugin_cc.agent_registry.base import AgentAdapter
 from kimi_code_plugin_cc.agent_registry.codex import CodexAdapter
+from kimi_code_plugin_cc.agent_registry.kimi import is_resume_hint_event
 from kimi_code_plugin_cc.bridge.runner import RunResult
 from kimi_code_plugin_cc.protocol.messages import DEFAULT_MAX_DEPTH, AgentMessage
 
 KIMI_MODULE = "kimi_code_plugin_cc.agent_registry.kimi"
 
 
-def _run_result(stdout: str = "", stderr: str = "", returncode: int = 0) -> RunResult:
+def _run_result(
+    stdout: str = "",
+    stderr: str = "",
+    returncode: int = 0,
+    early_exit: bool = False,
+) -> RunResult:
     return RunResult(
         returncode=returncode,
         stdout=stdout,
         stderr=stderr,
         args=[],
         env={},
+        early_exit=early_exit,
     )
 
 
@@ -166,6 +173,64 @@ class TestKimiCodeAdapter:
         cwd = mock_run.call_args.kwargs["cwd"]
         assert cwd is not None
         assert "kimi_worktree_" in str(cwd)
+
+    async def test_run_passes_completion_check_to_runner(self) -> None:
+        """Kimi prints its answer but may never exit (global MCP servers keep
+        the event loop alive), so the adapter must hand the runner a completion
+        sentinel instead of relying on process exit."""
+        adapter = KimiCodeAdapter()
+        with (
+            mock.patch(
+                f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock
+            ) as mock_run,
+            mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
+        ):
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        assert mock_run.call_args.kwargs["early_exit_check"] is is_resume_hint_event
+
+    async def test_early_exit_result_with_nonzero_code_is_not_failure(self) -> None:
+        """When the sentinel completed the run, the child was reaped by the
+        bridge — its exit code is meaningless and must not raise."""
+        adapter = KimiCodeAdapter()
+        stdout = json.dumps({"role": "assistant", "content": "OK"})
+        with (
+            mock.patch(
+                f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock
+            ) as mock_run,
+            mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
+        ):
+            mock_run.return_value = _run_result(
+                stdout=stdout, returncode=1, early_exit=True
+            )
+            result = await adapter.run("prompt", {})
+        assert result.payload == "OK"
+
+
+class TestResumeHintEvent:
+    def test_matches_real_resume_hint_event(self) -> None:
+        line = json.dumps(
+            {
+                "role": "meta",
+                "type": "session.resume_hint",
+                "session_id": "session_abc",
+                "content": "To resume this session: kimi -r session_abc",
+            }
+        )
+        assert is_resume_hint_event(line) is True
+
+    def test_ignores_assistant_content_mentioning_the_hint(self) -> None:
+        line = json.dumps(
+            {"role": "assistant", "content": 'docs about "session.resume_hint"'}
+        )
+        assert is_resume_hint_event(line) is False
+
+    def test_ignores_plain_text_containing_marker(self) -> None:
+        assert is_resume_hint_event("session.resume_hint but not json") is False
+
+    def test_ignores_unrelated_json_cheaply(self) -> None:
+        line = json.dumps({"role": "assistant", "content": "hi"})
+        assert is_resume_hint_event(line) is False
 
     async def test_run_can_disable_worktree(self) -> None:
         adapter = KimiCodeAdapter(use_isolated_worktree=False)

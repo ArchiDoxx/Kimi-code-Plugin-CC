@@ -14,14 +14,19 @@ structured review/planning/adversarial loops.
 - **Loop skills**: `review-loop` (iterative), `santa-loop` (adversarial
   dual-review, fail-closed), `planning-loop` (iterative plan refinement).
 - Spawn Kimi Code headlessly via `kimi -p ... --output-format stream-json`
-  (verified against Kimi Code **0.20.1**).
+  (verified against `@moonshot-ai/kimi-code` **0.22.2**).
 - Extensible agent registry: `kimi` (working adapter), `codex` (skeleton, raises
   `NotImplementedError` in v1.0 — present only to validate the abstraction).
 - Single async execution path: adapters `await` one shared, depth-guarded
   runner, so the same code works in tests and inside the MCP event loop.
-- **Windows-safe subprocess runner**: spawns the agent via `subprocess.run` in a
-  worker thread with `stdin=DEVNULL` + `CREATE_NO_WINDOW`, avoiding the
-  ProactorEventLoop pipe-inheritance block that hung the MCP server.
+- **Windows-safe subprocess runner**: spawns the agent in a worker thread with
+  `stdin=DEVNULL` + `CREATE_NO_WINDOW`, avoiding the ProactorEventLoop
+  pipe-inheritance block that hung the MCP server.
+- **Sentinel-based completion**: the runner returns as soon as Kimi emits its
+  terminal `session.resume_hint` event and then kills the whole child process
+  tree — required because `kimi -p` never exits when long-lived MCP servers
+  are configured in the user's global `~/.kimi-code/mcp.json`, which used to
+  turn every successful review into a timeout.
 - Message protocol with recursion depth-guard (`KIMI_BRIDGE_DEPTH`, default 2).
 - Read-only default policy, isolated worktrees (under the system temp dir),
   policy ceiling via `KIMI_MAX_POLICY`.
@@ -52,8 +57,8 @@ structured review/planning/adversarial loops.
 
 ## Prerequisites
 
-1. **Kimi Code CLI** installed and authenticated (`npm i -g @kimi-code/kimi` or
-   equivalent). Check with `kimi --version`.
+1. **Kimi Code CLI** installed and authenticated
+   (`npm i -g @moonshot-ai/kimi-code`). Check with `kimi --version`.
 2. **`uv`** on PATH (used by the MCP server to run the Python package).
 3. **Claude Code** with the plugin system enabled.
 

@@ -4,14 +4,17 @@ This is a Claude Code plugin that bridges headless CLI agents (starting with
 Kimi Code) into Claude Code as external subagents. Kimi Code is used as an
 **external reviewer / second opinion** for daily coding tasks. The design is
 scalable: add new agent adapters, review loops, and planning loops without
-changing the core. **Status: v1.0.0 — integration-ready, verified end-to-end
+changing the core. **Status: v1.1.0 — integration-ready, verified end-to-end
 on Windows.**
 
 ## Architecture
 
 - `src/kimi_code_plugin_cc/bridge/` — spawn and parse headless CLI output
-  (thread-backed `subprocess.run` with `stdin=DEVNULL` + `CREATE_NO_WINDOW` on
-  Windows to avoid the Proactor pipe-inheritance block).
+  (thread-backed subprocess with `stdin=DEVNULL` + `CREATE_NO_WINDOW` on
+  Windows to avoid the Proactor pipe-inheritance block; stdout is streamed and
+  the run completes on Kimi's `session.resume_hint` sentinel, then the child
+  process tree is killed — `kimi -p` does not exit on its own when global MCP
+  servers are configured).
 - `src/kimi_code_plugin_cc/protocol/` — Pydantic message schema with depth/bridge IDs.
 - `src/kimi_code_plugin_cc/agent_registry/` — adapter registry (`kimi` working,
   `codex` skeleton raising `NotImplementedError` in v1.0).
@@ -39,5 +42,8 @@ on Windows.**
 
 ## Verified against
 
-- Kimi Code CLI **0.20.1** (`kimi -p ... --output-format stream-json`).
+- Kimi Code CLI `@moonshot-ai/kimi-code` **0.22.2**
+  (`kimi -p ... --output-format stream-json`; completion detected via the
+  terminal `session.resume_hint` event because the process does not exit on
+  its own when global MCP servers are configured).
 - Python ≥ 3.11.

@@ -24,12 +24,12 @@ from kimi_code_plugin_cc.protocol.messages import (
 from .base import AgentAdapter
 
 # Pinned, verified against the installed Kimi Code CLI.
-# Flags confirmed live (kimi --help, kimi 0.18.0):
+# Flags confirmed live (kimi --help, @moonshot-ai/kimi-code 0.22.2, 2026-07-07):
 #   -p, --prompt <prompt>            non-interactive single prompt
 #   --output-format {text|stream-json}
 #   -y, --yolo / --auto              OPT-IN auto-approve (never added by us)
 # Non-existent flags ruled out earlier: --print, --final-message-only, --afk.
-DEFAULT_TIMEOUT_SECONDS = 120
+DEFAULT_TIMEOUT_SECONDS = 600
 STREAM_OUTPUT_FORMAT = "stream-json"
 KIMI_EXECUTABLE = "kimi"
 
@@ -41,6 +41,33 @@ EMPTY_RESPONSE_SENTINEL = "needs_discussion: agent returned no parseable output"
 # policy is enforced structurally (no flag) plus worktree isolation plus the
 # KIMI_MAX_POLICY ceiling; see ADR-002.
 NEVER_FLAGS = ("--yolo", "-y", "--auto", "--afk")
+
+# Terminal stream-json event: kimi emits {"role":"meta","type":"session.resume_hint"}
+# as the last line of a -p run. It is the completion signal the runner keys on,
+# because with long-lived MCP servers in the user's global ~/.kimi-code/mcp.json
+# the process prints its answer and then never exits (verified 2026-07-07, see
+# memory kimi-review-timeout-non-exit).
+_RESUME_HINT_TYPE = "session.resume_hint"
+
+
+def is_resume_hint_event(line: str) -> bool:
+    """Return True when *line* is Kimi's terminal ``session.resume_hint`` event.
+
+    Cheap substring pre-check first, then a JSON parse to confirm the top-level
+    event type — assistant content that merely *mentions* the marker arrives
+    JSON-escaped inside a string and therefore never matches the parsed check.
+    """
+    if _RESUME_HINT_TYPE not in line:
+        return False
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return False
+    return (
+        isinstance(obj, dict)
+        and obj.get("role") == "meta"
+        and obj.get("type") == _RESUME_HINT_TYPE
+    )
 
 
 # Regex to find a node entry-point (.mjs/.js) referenced inside a .cmd/.bat
@@ -189,11 +216,14 @@ class KimiCodeAdapter(AgentAdapter):
                 timeout=self._timeout,
                 max_depth=DEFAULT_MAX_DEPTH,
                 cwd=workdir,
+                early_exit_check=is_resume_hint_event,
             )
         finally:
             if own_workdir is not None:
                 shutil.rmtree(own_workdir, ignore_errors=True)
-        if result.returncode != 0:
+        # early_exit means the run completed via the resume-hint sentinel and
+        # the child was reaped by the bridge; its exit code is meaningless.
+        if result.returncode != 0 and not result.early_exit:
             raise RuntimeError(
                 f"Kimi CLI exited with {result.returncode}: {result.stderr.strip()}"
             )

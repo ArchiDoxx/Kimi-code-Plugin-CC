@@ -70,10 +70,7 @@ async def test_multiline_prompt_reaches_agent() -> None:
     kimi reported the message as cut off.
     """
     adapter = get("kimi")
-    prompt = (
-        "Reply with the word on the next line and nothing else.\n"
-        "BANANA"
-    )
+    prompt = "Reply with the word on the next line and nothing else.\nBANANA"
     msg = await adapter.run(
         prompt,
         {"depth": 0, "bridge_id": "live-test", "approval_policy": "read-only"},
@@ -102,6 +99,6 @@ async def test_multiline_bug_review_reaches_agent() -> None:
     )
     lowered = msg.payload.lower()
     # kimi should mention the name/operation mismatch (sub vs add).
-    assert any(
-        token in lowered for token in ("sub", "add", "mismatch", "name")
-    ), f"kimi did not reference the line-2 bug. Payload: {msg.payload!r}"
+    assert any(token in lowered for token in ("sub", "add", "mismatch", "name")), (
+        f"kimi did not reference the line-2 bug. Payload: {msg.payload!r}"
+    )
