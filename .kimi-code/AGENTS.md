@@ -11,6 +11,62 @@ _No key facts recorded yet._
 
 ## Recent Activity
 
+### 🐛 Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && u...
+Used Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && u... → ============================= test session starts =============================
+**Files:** [, ], [
+
+### 🔍 Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && f...
+Used Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && f... → src/kimi_code_plugin_cc/__init__.py
+**Files:** [, ], [
+
+### 🔍 Bash: mkdir -p C:/Users/luceb/Desktop/Kimi-code-Plugin-C...
+Used Bash: mkdir -p C:/Users/luceb/Desktop/Kimi-code-Plugin-C... → Command executed successfully.
+**Files:** [, ], [
+
+### 🔍 Write: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim...
+Used Write: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim... → Wrote 1049 bytes to C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kimi_code_plugi...
+**Files:** [, ], [
+
+### 🔍 Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/docs/pl...
+Used Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/docs/pl... → 1 # Plan: Kimi-Code-Plugin-CC v0.5
+**Files:** [, ], [
+
+### 🐛 Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re...
+Used Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re... → Found 1 error (1 fixed, 0 remaining).
+**Files:** [, ], [
+
+### 🐛 Bash: find src tests -type d -name __pycache__ -exec rm ...
+Used Bash: find src tests -type d -name __pycache__ -exec rm ... → ============================= test session starts =============================
+**Files:** [, ], [
+
+### 🐛 Bash: uv run pytest tests/test_agent_registry.py -v
+Used Bash: uv run pytest tests/test_agent_registry.py -v → ============================= test session starts =============================
+**Files:** [, ], [
+
+### 🐛 Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re...
+Used Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re... → F401 [*] `kimi_code_plugin_cc.security.policy.ApprovalPolicy` imported but unused
+**Files:** [, ], [
+
+### 🐛 Bash: find src tests -type d -name __pycache__ -exec rm ...
+Used Bash: find src tests -type d -name __pycache__ -exec rm ... → All checks passed!
+**Files:** [, ], [
+
+### 🔍 Edit: tests/test_agent_registry.py
+Used Edit: tests/test_agent_registry.py → old_string not found in tests/test_agent_registry.py, the file contents may be out of date. Please u...
+**Files:** [, ], [
+
+### 🔍 Read: tests/test_security.py
+Used Read: tests/test_security.py → 1 """Tests for the security policy layer and worktree isolation."""
+**Files:** [, ], [
+
+### 🔍 Read: src/kimi_code_plugin_cc/protocol/messages.py
+Used Read: src/kimi_code_plugin_cc/protocol/messages.py → 1 """Pydantic message models for the Kimi Code plugin bridge protocol.
+**Files:** [, ], [
+
+### 🐛 Bash: uv run pytest --cache-clear -v
+Used Bash: uv run pytest --cache-clear -v → ============================= test session starts =============================
+**Files:** [, ], [
+
 ### 🔍 Bash: ls -la tests/
 Used Bash: ls -la tests/ → drwxr-xr-x 1 luceb 197609 0 Jun 21 01:32 .
 **Files:** [, ], [
@@ -35,62 +91,6 @@ Used Edit: src/kimi_code_plugin_cc/agent_registry/codex.py → Replaced 1 occurr
 Used Bash: uv run ruff check . && uv run pytest -v → E501 Line too long (89 > 88)
 **Files:** [, ], [
 
-### 🐛 Read: src/kimi_code_plugin_cc/security/policy.py
-Used Read: src/kimi_code_plugin_cc/security/policy.py → 1 """Approval-policy enforcement and worktree isolation.
-**Files:** [, ], [
-
-### 🔍 Bash: uv run ruff format src/kimi_code_plugin_cc/agent_r...
-Used Bash: uv run ruff format src/kimi_code_plugin_cc/agent_r... → Would reformat: src\kimi_code_plugin_cc\agent_registry\__init__.py
-**Files:** [, ], [
-
-### 🔍 Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re...
-Used Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re... → All checks passed!
-**Files:** [, ], [
-
-### 🐛 Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re...
-Used Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re... → I001 [*] Import block is un-sorted or un-formatted
-**Files:** [, ], [
-
-### 🔍 Read: src/kimi_code_plugin_cc/agent_registry/__init__.py
-Used Read: src/kimi_code_plugin_cc/agent_registry/__init__.py → 1 """Agent registry for headless CLI adapters."""
-**Files:** [, ], [
-
-### 🔍 Read: src/kimi_code_plugin_cc/agent_registry/kimi.py
-Used Read: src/kimi_code_plugin_cc/agent_registry/kimi.py → 1 """Adapter for the Kimi Code CLI."""
-**Files:** [, ], [
-
-### 🐛 Bash: uv run ruff check . && uv run pytest tests/test_ag...
-Used Bash: uv run ruff check . && uv run pytest tests/test_ag... → F401 `typing.Any` imported but unused
-**Files:** [, ], [
-
-### 🔍 Bash: find src tests -type f -name '*.py' | sort
-Used Bash: find src tests -type f -name '*.py' | sort → src/kimi_code_plugin_cc/__init__.py
-**Files:** [, ], [
-
-### 🔍 Read: src/kimi_code_plugin_cc/__init__.py
-Used Read: src/kimi_code_plugin_cc/__init__.py → 1 """Kimi Code plugin for Claude Code — headless CLI agent bridge."""
-**Files:** [, ], [
-
-### 🔍 Write: src/kimi_code_plugin_cc/protocol/__init__.py
-Used Write: src/kimi_code_plugin_cc/protocol/__init__.py → Wrote 192 bytes to src/kimi_code_plugin_cc/protocol/__init__.py
-**Files:** [, ], [
-
-### 🔍 Write: src/kimi_code_plugin_cc/protocol/messages.py
-Used Write: src/kimi_code_plugin_cc/protocol/messages.py → Wrote 1319 bytes to src/kimi_code_plugin_cc/protocol/messages.py
-**Files:** [, ], [
-
-### 🔍 Write: src/kimi_code_plugin_cc/agent_registry/base.py
-Used Write: src/kimi_code_plugin_cc/agent_registry/base.py → Wrote 787 bytes to src/kimi_code_plugin_cc/agent_registry/base.py
-**Files:** [, ], [
-
-### 🔍 Edit: tests/test_agent_registry.py
-Used Edit: tests/test_agent_registry.py → Replaced 1 occurrence in tests/test_agent_registry.py
-**Files:** [, ], [
-
-### 🐛 Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && r...
-Used Bash: cd C:/Users/luceb/Desktop/Kimi-code-Plugin-CC && r... → All checks passed!
-**Files:** [, ], [
-
 ---
 
-*Auto-generated by kimi-mneme v2.0.24 | 48 observations*
+*Auto-generated by kimi-mneme v2.0.24 | 50 observations*
