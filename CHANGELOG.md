@@ -4,6 +4,15 @@ Technical release log for `kimi-code-plugin-cc`. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver and
 match `.claude-plugin/plugin.json` / `pyproject.toml`.
 
+## [1.3.1] — 2026-07-22
+
+### Fixed
+
+- Renamed `seam-design-review` to `team-design-review` and corrected all
+  occurrences of "seam" to "team" across the skill, `contract-audit`, README,
+  and CHANGELOG. This was a persistent typo from the upstream template that
+  used "Team-sync" and was accidentally written as "Seam-sync".
+
 ## [1.3.0] — 2026-07-07
 
 Bracket model selector on the slash-command surface; four role-specific
@@ -13,7 +22,7 @@ audit skills.
 
 - Four **audit skills** (single-pass, no new MCP tools, no slash commands):
   `contract-audit` (frozen contract vs implementation drift),
-  `seam-design-review` (proposed module boundary/interface),
+  `team-design-review` (proposed module boundary/interface),
   `fail-safe-audit` (every failure/stale/fault path vs safe-state invariant),
   `test-gap-audit` (missing test cases — edge, error, fail-safe, documented
   incidents). Role-specific briefs that complement the six generic skills;

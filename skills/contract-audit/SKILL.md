@@ -1,15 +1,15 @@
 ---
 name: contract-audit
-description: External audit of a frozen API / data-model contract against its implementation. The architect owns the seam — this skill sends the frozen contract AND the implementing code to Kimi Code and gets back field-by-field drift, missing pieces, and fail-safe coverage gaps. Single-pass, structured. For architects who own a seam.
+description: External audit of a frozen API / data-model contract against its implementation. The architect owns the team — this skill sends the frozen contract AND the implementing code to Kimi Code and gets back field-by-field drift, missing pieces, and fail-safe coverage gaps. Single-pass, structured. For architects who own a team.
 ---
 
 # contract-audit — external contract drift & consistency audit
 
 Use this for a **single focused audit** of a frozen API or data-model contract
-(the "seam") against the code that implements it. An external agent compares
+(the "team") against the code that implements it. An external agent compares
 contract and implementation field-by-field / endpoint-by-endpoint and reports
 drift, missing pieces, and fail-safe gaps. Built for the architect who owns
-the seam.
+the team.
 
 This is the architect's counterpart to `code-review`: where `code-review` looks
 at code quality, `contract-audit` looks at **contract fidelity** — does the
@@ -19,14 +19,14 @@ wire reality match the frozen spec, and does every contract guarantee hold?
 
 - After freezing or changing an API / data-model contract (before it ships to
   other teams).
-- Before a milestone gate where the seam must be stable.
+- Before a milestone gate where the team must be stable.
 - When you suspect the implementation has drifted from the frozen spec.
 - Reviewing a contract for internal consistency, completeness, and fail-safe
   coverage before signing it off.
 
 **Do NOT use** for general code quality — use `code-review`. For a single
 decision trade-off, use `second-opinion`. If two independent reviewers must
-agree on a contract change (safety-critical seam), escalate to `santa-loop`.
+agree on a contract change (safety-critical team), escalate to `santa-loop`.
 
 ## How to use
 
@@ -43,7 +43,7 @@ mcp__kimi-code-plugin-cc__run_agent(
 **contents** in the prompt. The agent runs in an isolated worktree and cannot
 open arbitrary host paths.
 
-Optionally route to a different model — e.g. a stronger one for a final-seam
+Optionally route to a different model — e.g. a stronger one for a final-team
 sign-off. The alias must exist in the agent CLI's own config
 (`~/.kimi-code/config.toml`); see `bridge` for details:
 

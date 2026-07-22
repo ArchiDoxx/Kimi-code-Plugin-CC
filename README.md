@@ -70,7 +70,7 @@ See [Model selection](#model-selection-multi-provider).
 | `santa-loop` | loop | Fail-closed adversarial dual-review (two reviewers must agree). |
 | `planning-loop` | loop | Iterative plan creation/refinement. |
 | `contract-audit` | audit (single-pass) | Frozen API/data-model contract vs implementation — drift, missing pieces, fail-safe gaps. |
-| `seam-design-review` | audit (single-pass) | Proposed module boundary/interface — coupling direction, deep-module quality, leaks. |
+| `team-design-review` | audit (single-pass) | Proposed module boundary/interface — coupling direction, deep-module quality, leaks. |
 | `fail-safe-audit` | audit (single-pass) | Every failure/stale/fault path checked for safe-state behavior. |
 | `test-gap-audit` | audit (single-pass) | Audits the *tests* for missing cases (edge, error, fail-safe, documented incidents). |
 
