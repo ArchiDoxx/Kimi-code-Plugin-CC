@@ -1,6 +1,6 @@
 [project]
 name = "kimi-code-plugin-cc"
-version = "1.3.1"
+version = "1.4.0"
 description = "Claude Code plugin for headless CLI-agent communication via Kimi Code"
 readme = "README.md"
 license = { text = "MIT" }
@@ -20,6 +20,9 @@ dev = [
 
 [project.scripts]
 kimi-code-plugin-mcp = "kimi_code_plugin_cc.mcp_server:main"
+# Operator entry point: `kimi-code-plugin doctor` verifies the agent CLI and
+# configuration before a failure shows up mid-review.
+kimi-code-plugin = "kimi_code_plugin_cc.cli:main"
 
 [build-system]
 requires = ["hatchling"]

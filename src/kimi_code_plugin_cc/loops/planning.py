@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from kimi_code_plugin_cc.agent_registry import get
+from kimi_code_plugin_cc.loops.prompts import plain_prompt
 from kimi_code_plugin_cc.protocol.messages import AgentMessage, to_adapter_context
 
 DEFAULT_MAX_ITERATIONS = 3
@@ -21,7 +22,7 @@ class PlanResult(BaseModel):
 
 
 def _build_initial_prompt(user_prompt: str) -> str:
-    return f"Create a concise, step-by-step plan for:\n\n{user_prompt}"
+    return plain_prompt(f"Create a concise, step-by-step plan for:\n\n{user_prompt}")
 
 
 def _build_refinement_prompt(
@@ -29,7 +30,7 @@ def _build_refinement_prompt(
     current_plan: str,
     iteration: int,
 ) -> str:
-    return (
+    return plain_prompt(
         f"Refine the following plan (iteration {iteration}).\n\n"
         f"Current plan:\n{current_plan}\n\n"
         f"Task:\n{user_prompt}"

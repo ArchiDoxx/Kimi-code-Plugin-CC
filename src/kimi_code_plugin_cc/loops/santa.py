@@ -23,6 +23,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from kimi_code_plugin_cc.agent_registry import get
+from kimi_code_plugin_cc.loops.prompts import review_prompt
 from kimi_code_plugin_cc.protocol.messages import AgentMessage, to_adapter_context
 
 from .review import ReviewResult, ReviewVerdict, extract_verdict
@@ -51,13 +52,9 @@ class SantaResult(BaseModel):
 
 
 def _build_initial_review_prompt(target: str) -> str:
-    return (
-        "Perform a thorough code review of the following target. "
-        "Respond with a verdict (approve, request_changes, needs_discussion) "
-        "and comments.\n\n"
-        "On a final line, output exactly "
-        "`VERDICT: <approve|request_changes|needs_discussion>` so the verdict "
-        "is machine-readable.\n\n"
+    return review_prompt(
+        "Perform a thorough code review of the following target and give "
+        "concrete comments.\n\n"
         f"Target:\n{target}"
     )
 
@@ -68,7 +65,14 @@ def _build_revision_prompt(
     secondary_review: ReviewResult,
     iteration: int,
 ) -> str:
-    return (
+    """Build the primary reviewer's revision prompt for the next round.
+
+    Both reviews are quoted verbatim, so the verdict contract (restated by
+    :func:`review_prompt`) explicitly tells the reviewer not to echo the other
+    reviewer's ``VERDICT:`` line — and ``extract_verdict`` fail-closes to
+    ``needs_discussion`` if two conflicting lines show up anyway.
+    """
+    return review_prompt(
         f"Another reviewer disagrees with your review (iteration {iteration}).\n\n"
         f"Your previous review:\n{primary_review.review}\n\n"
         f"Their review:\n{secondary_review.review}\n\n"
@@ -77,12 +81,11 @@ def _build_revision_prompt(
 
 
 def _adversarial_prompt(target: str, primary_review: ReviewResult) -> str:
-    return (
+    return review_prompt(
         "You are an INDEPENDENT adversarial reviewer. Another reviewer produced "
         "the review below. Do NOT inherit their conclusion — form your own.\n\n"
         f"Their review:\n{primary_review.review}\n\n"
-        "Only reply with 'approve' if you find no real issue. Respond with a "
-        "verdict (approve, request_changes, needs_discussion) and comments.\n\n"
+        "Only approve if you find no real issue.\n\n"
         f"Target:\n{target}"
     )
 

@@ -9,6 +9,7 @@ import pytest
 from kimi_code_plugin_cc.agent_registry import register
 from kimi_code_plugin_cc.agent_registry.base import AgentAdapter
 from kimi_code_plugin_cc.loops.planning import PlanResult, planning_loop
+from kimi_code_plugin_cc.loops.prompts import STANDALONE_PREAMBLE
 from kimi_code_plugin_cc.loops.review import (
     ReviewResult,
     ReviewVerdict,
@@ -386,3 +387,78 @@ class TestVerdictTolerance:
         assert extract_verdict("the approval process is documented") == (
             ReviewVerdict.NEEDS_DISCUSSION
         )
+
+
+class TestConflictingStructuredVerdicts:
+    """Two disagreeing VERDICT lines are ambiguity, and ambiguity is not approval.
+
+    The santa loop quotes the other reviewer's full text into the next prompt,
+    so a reply can legitimately contain a second VERDICT line. Picking the first
+    (or the last) match would silently adopt whichever one landed there.
+    """
+
+    def test_conflicting_lines_fail_closed(self) -> None:
+        text = (
+            "Their review said:\nVERDICT: approve\n"
+            "I disagree.\nVERDICT: request_changes\n"
+        )
+        assert extract_verdict(text) == ReviewVerdict.NEEDS_DISCUSSION
+
+    def test_quoted_approve_cannot_override_own_request_changes(self) -> None:
+        text = "VERDICT: request_changes\n\nVERDICT: approve\n"
+        assert extract_verdict(text) == ReviewVerdict.NEEDS_DISCUSSION
+
+    def test_repeated_identical_verdict_is_honoured(self) -> None:
+        # Unanimous repetition is not ambiguity.
+        text = "VERDICT: approve\nsummary\nVERDICT: approve\n"
+        assert extract_verdict(text) == ReviewVerdict.APPROVE
+
+    def test_single_line_still_wins_over_free_text(self) -> None:
+        text = "I would request changes normally, but:\nVERDICT: approve"
+        assert extract_verdict(text) == ReviewVerdict.APPROVE
+
+
+class TestPromptContract:
+    """Every round must restate the verdict contract, not just the first one."""
+
+    async def test_review_loop_repeats_contract_in_later_rounds(self) -> None:
+        stub = StubAdapter("contract-review", ["no verdict here", "still nothing"])
+        register("contract-review", stub)
+        await review_loop("contract-review", "target", max_iterations=2)
+        assert len(stub._calls) == 2
+        for prompt, _ctx in stub._calls:
+            assert "VERDICT:" in prompt
+
+    async def test_review_prompts_carry_standalone_preamble(self) -> None:
+        stub = StubAdapter("preamble-review", ["nothing", "nothing"])
+        register("preamble-review", stub)
+        await review_loop("preamble-review", "target", max_iterations=2)
+        for prompt, _ctx in stub._calls:
+            assert prompt.startswith(STANDALONE_PREAMBLE)
+
+    async def test_santa_adversary_prompt_carries_contract(self) -> None:
+        stub = StubAdapter("contract-santa", ["request_changes please"])
+        register("contract-santa", stub)
+        await santa_loop("contract-santa", "target", max_iterations=1)
+        # Primary review + adversarial review.
+        assert len(stub._calls) == 2
+        for prompt, _ctx in stub._calls:
+            assert "VERDICT:" in prompt
+            assert prompt.startswith(STANDALONE_PREAMBLE)
+
+    async def test_santa_revision_prompt_carries_contract(self) -> None:
+        stub = StubAdapter("revision-santa", ["request_changes please"])
+        register("revision-santa", stub)
+        await santa_loop("revision-santa", "target", max_iterations=2)
+        # Round 1 primary + adversary, round 2 primary + adversary.
+        assert len(stub._calls) == 4
+        revision_prompt = stub._calls[2][0]
+        assert "VERDICT:" in revision_prompt
+        assert "do not repeat or quote" in revision_prompt.lower()
+
+    async def test_planning_prompts_carry_standalone_preamble(self) -> None:
+        stub = StubAdapter("preamble-plan", ["plan a", "plan b"])
+        register("preamble-plan", stub)
+        await planning_loop("preamble-plan", "task", max_iterations=2)
+        for prompt, _ctx in stub._calls:
+            assert prompt.startswith(STANDALONE_PREAMBLE)

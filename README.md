@@ -5,10 +5,14 @@ Claude Code as first-class subagents — so you can use Kimi Code as an **extern
 reviewer** for daily coding tasks (`/kimi-code-review`, `/kimi-opinion`) plus
 structured review/planning/adversarial loops.
 
-**Status: v1.3.0 — integration-ready, verified end-to-end on Windows
-(sentinel-based completion + multi-provider model selection, now with a
-per-call `[<model>]` bracket selector on every slash command).**
-See [CHANGELOG.md](CHANGELOG.md) for the technical release log.
+**Status: v1.4.0 — integration-ready, verified end-to-end on Windows against
+`@moonshot-ai/kimi-code` 0.29.1.** This release makes the loops correct across
+*all* rounds (not just the first), gives the MCP surface a single error contract
+so a crash can never read as an approval, and adds `doctor` for preflight
+diagnostics. See [CHANGELOG.md](CHANGELOG.md) for the technical release log.
+
+New here? Run `uv run kimi-code-plugin doctor` first — it answers most "why did
+my review fail" questions before you hit them.
 
 ## Features
 
@@ -16,8 +20,22 @@ See [CHANGELOG.md](CHANGELOG.md) for the technical release log.
   `second-opinion` (`/kimi-opinion`), `bridge` (`/kimi-run`).
 - **Loop skills**: `review-loop` (iterative), `santa-loop` (adversarial
   dual-review, fail-closed), `planning-loop` (iterative plan refinement).
+- **Preflight diagnostics**: `kimi-code-plugin doctor` verifies the agent CLI is
+  installed, reports its version, checks the flag surface the adapter depends
+  on, and prints the effective policy ceiling, depth guard, prompt limit and
+  worktree base. Exits non-zero on failure, so it works in setup scripts and CI.
 - Spawn Kimi Code headlessly via `kimi -p ... --output-format stream-json`
-  (verified against `@moonshot-ai/kimi-code` **0.22.2**).
+  (verified against `@moonshot-ai/kimi-code` **0.29.1**; the plugin is not
+  pinned to a CLI version — it depends only on `-p`, `--output-format`, `-m`,
+  and `tests/test_cli_contract.py` pins exactly that surface).
+- **Reproducible reviews**: the spawned agent runs with skills discovery
+  disabled (`--skills-dir` at an empty directory), so a review does not silently
+  change because of what is installed on the host. Applied only when the
+  installed CLI advertises the flag; opt out with `KIMI_ISOLATE_SKILLS=0`.
+- **One error contract**: every MCP tool returns a classified error
+  (`not_installed`, `unknown_agent`, `timeout`, `agent_failed`, …) instead of a
+  raw exception — and the loop tools keep their fail-closed verdict in the error
+  payload, so a crash reads as "not approved", never as "no signal".
 - **Multi-provider model selection**: every MCP tool takes an optional
   `model` parameter (a model alias from the CLI's own config, passed as
   `kimi -m`), so runs can be routed to any configured provider/model
@@ -87,6 +105,25 @@ escalate safety-critical sign-offs to `santa-loop`.
 2. **`uv`** on PATH (used by the MCP server to run the Python package).
 3. **Claude Code** with the plugin system enabled.
 
+Verify all of it at once:
+
+```bash
+uv run kimi-code-plugin doctor
+```
+
+```text
+[ok]   agent CLI: found at .../@moonshot-ai/kimi-code/dist/main.mjs
+[ok]   CLI version: 0.29.1
+[ok]   flag surface: all required flags present: -p, --output-format, -m
+[ok]   skills isolation: --skills-dir active
+[ok]   policy ceiling: KIMI_MAX_POLICY=read-only
+[ok]   depth guard: max nested spawns = 2
+[ok]   prompt limit: 30000 characters
+[ok]   worktree base: ... (from system temp) is writable
+
+Ready.
+```
+
 ## Install (development)
 
 ```bash
@@ -95,6 +132,9 @@ uv run pytest
 uv run ruff check .
 uv run ruff format .
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and release steps,
+and [SECURITY.md](SECURITY.md) for the threat model.
 
 ## Install in Claude Code
 
@@ -183,6 +223,10 @@ does not match the alias charset.
 | `KIMI_MAX_POLICY` | `read-only` | Hard ceiling on the approval policy; model-driven escalation is blocked above this. |
 | `KIMI_BRIDGE_DEPTH` | `2` | Maximum recursion depth for nested agent spawns. |
 | `KIMI_WORKTREE_BASE` | system temp | Base directory for isolated agent worktrees. |
+| `KIMI_MAX_PROMPT_CHARS` | `30000` | Prompt ceiling. The prompt is passed as a command-line argument, which the OS caps (32767 characters on Windows); oversized prompts are rejected with an actionable message instead of an opaque spawn failure. |
+| `KIMI_ISOLATE_SKILLS` | `1` | Run the agent with skills discovery disabled so reviews are reproducible across machines. Set to `0` to let it load the host's skills. |
+
+`kimi-code-plugin doctor` prints the effective values of all of these.
 
 ## Live smoke-test steps
 

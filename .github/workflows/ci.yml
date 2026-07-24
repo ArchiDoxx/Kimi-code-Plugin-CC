@@ -1,0 +1,64 @@
+name: CI
+
+# The plugin is developed on Windows but the runner has separate POSIX paths
+# (killpg vs taskkill, start_new_session), so both platforms are built.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --extra dev --python ${{ matrix.python }}
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      # The suite excludes the `live` marker by default, so no agent CLI is
+      # needed here; tests/test_cli_contract.py skips itself when the CLI is
+      # absent rather than failing the build.
+      - name: Test
+        run: uv run pytest -q --cov=kimi_code_plugin_cc --cov-report=term-missing
+
+  plugin-manifest:
+    name: Plugin manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The plugin version and the package version live in two files and drift
+      # apart silently; a release with mismatched metadata installs fine but
+      # reports the wrong version.
+      - name: Versions match
+        run: |
+          plugin_version=$(python3 -c "import json;print(json.load(open('.claude-plugin/plugin.json'))['version'])")
+          package_version=$(python3 -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "plugin.json=$plugin_version pyproject.toml=$package_version"
+          test "$plugin_version" = "$package_version"

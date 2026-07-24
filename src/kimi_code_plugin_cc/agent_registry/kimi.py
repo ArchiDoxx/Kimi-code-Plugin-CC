@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 import shutil
 from pathlib import Path
 from typing import Any, cast
 
+from kimi_code_plugin_cc.agent_registry.capabilities import supports_flag
 from kimi_code_plugin_cc.bridge.runner import (
     DEPTH_ENV_VAR,
     RunResult,
@@ -24,7 +27,9 @@ from kimi_code_plugin_cc.protocol.messages import (
 from .base import AgentAdapter
 
 # Pinned, verified against the installed Kimi Code CLI.
-# Flags confirmed live (kimi --help, @moonshot-ai/kimi-code 0.22.2, 2026-07-07):
+# Flags confirmed live (kimi --help, @moonshot-ai/kimi-code 0.29.1, 2026-07-25;
+# unchanged since 0.22.2). Runtime detection for anything beyond this set lives
+# in capabilities.py — do not add a flag here just because your CLI has it.
 #   -p, --prompt <prompt>            non-interactive single prompt
 #   --output-format {text|stream-json}
 #   -y, --yolo / --auto              OPT-IN auto-approve (never added by us)
@@ -54,6 +59,69 @@ _RESUME_HINT_TYPE = "session.resume_hint"
 # and the first character must be alphanumeric, so a model value can never
 # smuggle a CLI flag into the argv — same structural posture as NEVER_FLAGS.
 _MODEL_ALIAS_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
+
+# Prompt size guard. The prompt travels as an argv element (`-p <prompt>`), and
+# Windows caps a whole CreateProcess command line at 32767 characters. Callers
+# are told to paste file *contents* (the agent runs in an empty worktree and
+# cannot open host paths), so oversized prompts are easy to hit — and without
+# this guard they surface as an opaque OSError from the spawn instead of an
+# actionable message. The default leaves headroom for the executable path and
+# the remaining flags; override with KIMI_MAX_PROMPT_CHARS.
+_ENV_MAX_PROMPT_CHARS = "KIMI_MAX_PROMPT_CHARS"
+DEFAULT_MAX_PROMPT_CHARS = 30_000
+
+# Skills isolation. Without it the spawned agent auto-discovers the user's
+# global and project skill directories, so the same review can produce
+# different output on two machines. `--skills-dir <empty dir>` replaces
+# discovery with a directory we control, which makes runs reproducible.
+# The flag does not exist in every CLI version, so it is only added when the
+# installed CLI advertises it (see capabilities.supports_flag). Set
+# KIMI_ISOLATE_SKILLS=0 to keep the host's skills.
+_ENV_ISOLATE_SKILLS = "KIMI_ISOLATE_SKILLS"
+_SKILLS_DIR_FLAG = "--skills-dir"
+_EMPTY_SKILLS_DIRNAME = ".kimi-no-skills"
+_FALSEY = frozenset({"0", "false", "no", "off"})
+
+
+def _max_prompt_chars() -> int:
+    """Return the configured prompt ceiling, falling back to the default.
+
+    A non-numeric or non-positive override is ignored rather than allowed to
+    disable the guard silently.
+    """
+    raw = os.environ.get(_ENV_MAX_PROMPT_CHARS)
+    if raw is None:
+        return DEFAULT_MAX_PROMPT_CHARS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_PROMPT_CHARS
+    return value if value > 0 else DEFAULT_MAX_PROMPT_CHARS
+
+
+def _skills_isolation_enabled() -> bool:
+    """Return True unless ``KIMI_ISOLATE_SKILLS`` is explicitly falsey."""
+    return os.environ.get(_ENV_ISOLATE_SKILLS, "1").strip().lower() not in _FALSEY
+
+
+def _assert_prompt_fits(prompt: str) -> None:
+    """Raise ValueError when *prompt* exceeds the argv budget.
+
+    Raised before anything is spawned so the caller gets an actionable message
+    ("review a smaller slice") instead of an opaque spawn failure. ValueError is
+    the same class the MCP layer already turns into a structured error.
+    """
+    limit = _max_prompt_chars()
+    length = len(prompt)
+    if length <= limit:
+        return
+    raise ValueError(
+        f"Prompt is {length} characters, above the {limit}-character limit. "
+        "The prompt is passed to the CLI as a command-line argument, which the "
+        "operating system caps (32767 characters on Windows). Review a smaller "
+        f"slice (one file or hunk at a time), or raise {_ENV_MAX_PROMPT_CHARS} "
+        "if your platform allows longer command lines."
+    )
 
 
 def _validate_model_alias(model: str) -> str:
@@ -162,6 +230,7 @@ class KimiCodeAdapter(AgentAdapter):
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         use_isolated_worktree: bool = True,
         model: str | None = None,
+        isolate_skills: bool | None = None,
     ) -> None:
         self._name = name
         self._worktree = worktree
@@ -170,6 +239,9 @@ class KimiCodeAdapter(AgentAdapter):
         # Default model alias for every run; a per-call ``model`` context key
         # overrides it. None lets kimi use default_model from config.toml.
         self._model = model
+        # None defers to KIMI_ISOLATE_SKILLS (default on); an explicit bool
+        # wins, so an embedding caller can opt out without touching the env.
+        self._isolate_skills = isolate_skills
 
     @property
     def name(self) -> str:
@@ -184,6 +256,7 @@ class KimiCodeAdapter(AgentAdapter):
         model = ctx.get("model", self._model)
         if model is not None:
             model = _validate_model_alias(model)
+        _assert_prompt_fits(prompt)
 
         command = self._build_command(prompt, model)
         result = await self._execute(command, depth)
@@ -241,6 +314,10 @@ class KimiCodeAdapter(AgentAdapter):
             if (self._use_isolated_worktree and self._worktree is None)
             else None
         )
+        # The executable prefix is whatever _resolve_executable prepended: one
+        # element for a direct binary, two for a de-shimmed ``node <entry>``.
+        prefix = resolved[: len(resolved) - (len(command) - 1)]
+        resolved = await self._with_skills_isolation(resolved, prefix, workdir)
         try:
             result = await run_agent_process(
                 resolved,
@@ -260,6 +337,39 @@ class KimiCodeAdapter(AgentAdapter):
                 f"Kimi CLI exited with {result.returncode}: {result.stderr.strip()}"
             )
         return result
+
+    async def _with_skills_isolation(
+        self,
+        argv: list[str],
+        prefix: list[str],
+        workdir: Path | None,
+    ) -> list[str]:
+        """Append ``--skills-dir <empty dir>`` when it is safe and wanted.
+
+        Returns *argv* unchanged when isolation is disabled, when there is no
+        working directory to host the empty directory, or when the installed
+        CLI does not advertise the flag — passing an unknown flag would make
+        every call fail, so the fail-safe is the older command shape.
+
+        The empty directory lives inside the run's working directory, so the
+        existing cleanup removes it and no temp dirs leak.
+        """
+        enabled = (
+            _skills_isolation_enabled()
+            if self._isolate_skills is None
+            else self._isolate_skills
+        )
+        if not enabled or workdir is None:
+            return argv
+        if not await asyncio.to_thread(supports_flag, prefix, _SKILLS_DIR_FLAG):
+            return argv
+        skills_dir = Path(workdir) / _EMPTY_SKILLS_DIRNAME
+        try:
+            skills_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Cannot create the sandbox: fall back rather than fail the run.
+            return argv
+        return [*argv, _SKILLS_DIR_FLAG, str(skills_dir)]
 
     def _resolve_executable(self, command: list[str]) -> list[str]:
         """Resolve the first argument, de-shimming Windows ``.cmd``/``.bat`` wrappers.
@@ -335,7 +445,8 @@ class KimiCodeAdapter(AgentAdapter):
     def _extract_text(self, obj: Any) -> str | None:
         """Extract a text payload from an assistant stream-json event.
 
-        Live format (kimi 0.18.0) emits one ``{"role":"assistant","content":...}``
+        Live format (confirmed on 0.18.0 through 0.29.1) emits one
+        ``{"role":"assistant","content":...}``
         event carrying the full reply, followed by a ``{"role":"meta",...}``
         session-resume hint. We keep only assistant content and ignore meta and
         control events (session hints, usage, etc.).
