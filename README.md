@@ -30,7 +30,8 @@ my review fail" questions before you hit them.
   `<base>/<run_id>/` (a `run.json` summary plus one `round-NN-<role>.md` per
   exchange), so a review can be audited after the fact. Transcripts contain
   the reviewed code verbatim; recording is fail-open and can be disabled with
-  `KIMI_TRANSCRIPTS=0`.
+  `KIMI_TRANSCRIPTS=0`. Read them back with `kimi-code-plugin transcripts` —
+  see [Reading transcripts](#reading-transcripts).
 - **Preflight diagnostics**: `kimi-code-plugin doctor` verifies the agent CLI is
   installed, reports its version, checks the flag surface the adapter depends
   on, and prints the effective policy ceiling, depth guard, prompt limit and
@@ -178,6 +179,29 @@ Verify with `/plugin list` (should show `kimi-code-plugin-cc`) and
 /kimi-review src/myfile.py --loop santa  # adversarial dual-review (fail-closed)
 /kimi-review src/myfile.py --loop santa [zai-coding-plan/glm-5.2]  # …on GLM
 ```
+
+## Reading transcripts
+
+Every loop run is on disk; `transcripts` is the read-only way through it. It
+never writes, so it is safe to run while a loop is still recording.
+
+```bash
+uv run kimi-code-plugin transcripts list            # newest runs (default 20)
+uv run kimi-code-plugin transcripts show 20260726T2059  # unique prefix is enough
+uv run kimi-code-plugin transcripts show 20260726T2059 --round 1  # verbatim round
+```
+
+```
+RUN ID                          LOOP    FINAL         ROUNDS  STARTED
+20260726T205959Z-santa-3814f8   santa   red           2       2026-07-26T20:59:59Z
+20260726T205959Z-review-9d2074  review  (incomplete)  1       2026-07-26T20:59:59Z
+```
+
+`(incomplete)` means the run never finalized (usually a crash or a cancel);
+`(unreadable)` means its `run.json` is corrupt — `show` then falls back to the
+round files still on disk, because those are the substance of a transcript.
+Exit codes: `0` also when nothing is recorded yet, `1` for an unknown or
+ambiguous run id and for a round that does not exist.
 
 ## MCP server
 

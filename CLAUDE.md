@@ -30,7 +30,10 @@ on Windows.**
 - `src/kimi_code_plugin_cc/transcript.py` - best-effort, fail-open transcript
   persistence for the loops (one `<base>/<run_id>/` directory per run:
   `run.json` plus one `round-NN-<role>.md` per exchange). Configured via
-  `KIMI_TRANSCRIPTS` / `KIMI_TRANSCRIPT_DIR` / `KIMI_TRANSCRIPT_KEEP`.
+  `KIMI_TRANSCRIPTS` / `KIMI_TRANSCRIPT_DIR` / `KIMI_TRANSCRIPT_KEEP`. Its
+  read half is `transcript_view.py` behind `kimi-code-plugin transcripts
+  list|show` - strictly read-only, reuses `_RUN_ID_RE`/`_base_dir` from the
+  recorder, and reports damaged runs instead of raising.
 - `src/kimi_code_plugin_cc/errors.py` — the single error contract for the MCP
   surface. Loop tools return their fail-closed verdict inside the error payload.
 - `src/kimi_code_plugin_cc/doctor.py` — preflight checks behind
