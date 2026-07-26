@@ -7,6 +7,7 @@ import logging
 
 from mcp.server import FastMCP
 
+from kimi_code_plugin_cc import errors
 from kimi_code_plugin_cc.agent_registry import get
 from kimi_code_plugin_cc.loops import planning_loop, review_loop, santa_loop
 from kimi_code_plugin_cc.protocol.messages import AgentMessage, to_adapter_context
@@ -15,6 +16,19 @@ from kimi_code_plugin_cc.security.policy import resolve_effective_policy
 logger = logging.getLogger(__name__)
 
 SERVER_NAME = "kimi-code-plugin-cc"
+
+# Every failure below is caught and rendered through `errors`. Anything that
+# escaped would reach the MCP client as a raw protocol exception with no
+# verdict attached — which, for the fail-closed santa loop, lets a crash read
+# as "no signal" instead of "not approved".
+_TOOL_FAILURES = (
+    OSError,  # FileNotFoundError: the agent CLI is not installed / not on PATH
+    TimeoutError,
+    ValueError,  # invalid model alias, invalid max_iterations
+    KeyError,  # unknown agent name
+    RuntimeError,  # agent exited non-zero, depth guard
+    NotImplementedError,  # skeleton adapter (codex)
+)
 
 
 def create_server() -> FastMCP:
@@ -42,22 +56,24 @@ def create_server() -> FastMCP:
                 multi-provider setups route a run to e.g. a GLM model.
                 Omitted: the CLI's default model applies.
         """
-        effective_policy = resolve_effective_policy(approval_policy)
-        adapter = get(agent_name)
-        message: AgentMessage = AgentMessage(
-            bridge_id=f"mcp-{agent_name}",
-            depth=0,
-            approval_policy=effective_policy.to_string(),
-            payload=prompt,
-        )
-        context = to_adapter_context(message, model=model)
         try:
+            effective_policy = resolve_effective_policy(approval_policy)
+            adapter = get(agent_name)
+            message: AgentMessage = AgentMessage(
+                bridge_id=f"mcp-{agent_name}",
+                depth=0,
+                approval_policy=effective_policy.to_string(),
+                payload=prompt,
+            )
+            context = to_adapter_context(message, model=model)
             response: AgentMessage = await adapter.run(prompt, context)
-        except (PermissionError, ValueError) as exc:
-            # Structured, caller-friendly error instead of an opaque stack trace
-            # at the MCP boundary: policy escalation is refused (v1.0 enforces
-            # read-only) and an invalid model alias is rejected by the adapter.
-            return f"error: {exc}"
+        except _TOOL_FAILURES as exc:
+            # Prefixed, classified error instead of an opaque stack trace at the
+            # MCP boundary. The prefix matters because this tool returns the
+            # agent's text verbatim on success, so an error must be
+            # unmistakable rather than look like review prose.
+            logger.warning("run_agent failed: %s", exc)
+            return errors.as_text(exc)
         return response.payload
 
     @server.tool()
@@ -78,9 +94,13 @@ def create_server() -> FastMCP:
             max_iterations: Maximum review rounds (default 3).
             model: Optional model alias (agent CLI config) for every round.
         """
-        result = await review_loop(
-            agent_name, target, max_iterations=max_iterations, model=model
-        )
+        try:
+            result = await review_loop(
+                agent_name, target, max_iterations=max_iterations, model=model
+            )
+        except _TOOL_FAILURES as exc:
+            logger.warning("run_review_loop failed: %s", exc)
+            return errors.as_json(exc, verdict="needs_discussion")
         return result.model_dump_json(indent=2)
 
     @server.tool()
@@ -106,9 +126,15 @@ def create_server() -> FastMCP:
             max_iterations: Maximum rounds before fail-closed ``red`` (default 3).
             model: Optional model alias (agent CLI config) for both reviewers.
         """
-        result = await santa_loop(
-            primary_agent, target, max_iterations=max_iterations, model=model
-        )
+        try:
+            result = await santa_loop(
+                primary_agent, target, max_iterations=max_iterations, model=model
+            )
+        except _TOOL_FAILURES as exc:
+            # Fail-closed extends to internal failure: the caller still gets a
+            # red verdict, never a missing one.
+            logger.warning("run_santa_loop failed: %s", exc)
+            return errors.as_json(exc, verdict="red")
         return result.model_dump_json(indent=2)
 
     @server.tool()
@@ -126,9 +152,13 @@ def create_server() -> FastMCP:
             max_iterations: Maximum refinement rounds (default 3).
             model: Optional model alias (agent CLI config) for every round.
         """
-        result = await planning_loop(
-            agent_name, prompt, max_iterations=max_iterations, model=model
-        )
+        try:
+            result = await planning_loop(
+                agent_name, prompt, max_iterations=max_iterations, model=model
+            )
+        except _TOOL_FAILURES as exc:
+            logger.warning("run_planning_loop failed: %s", exc)
+            return errors.as_json(exc, status_hint="no plan produced")
         return result.model_dump_json(indent=2)
 
     return server

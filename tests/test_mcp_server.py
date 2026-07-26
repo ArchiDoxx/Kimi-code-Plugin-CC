@@ -10,6 +10,7 @@ import pytest
 
 from kimi_code_plugin_cc.agent_registry import register
 from kimi_code_plugin_cc.agent_registry.base import AgentAdapter
+from kimi_code_plugin_cc.errors import ERROR_PREFIX, ErrorKind
 from kimi_code_plugin_cc.mcp_server import create_server
 from kimi_code_plugin_cc.protocol.messages import AgentMessage
 
@@ -126,15 +127,20 @@ async def test_run_agent_policy_is_capped(echo_adapter: EchoAdapter) -> None:
     assert content[0].text == "echo: hello"
 
 
-async def test_run_agent_unknown_agent_raises(echo_adapter: EchoAdapter) -> None:
-    from mcp.server.fastmcp.exceptions import ToolError
-
+async def test_run_agent_unknown_agent_returns_classified_error(
+    echo_adapter: EchoAdapter,
+) -> None:
+    # An unknown agent used to escape as a raw ToolError. It is a routine user
+    # typo, so it must come back as a classified, actionable error instead.
     server = create_server()
-    with pytest.raises(ToolError, match="No adapter registered"):
-        await server.call_tool(
-            "run_agent",
-            {"agent_name": "missing", "prompt": "hello"},
-        )
+    content, _meta = await server.call_tool(
+        "run_agent",
+        {"agent_name": "missing", "prompt": "hello"},
+    )
+    text = content[0].text
+    assert text.startswith(f"{ERROR_PREFIX} [{ErrorKind.UNKNOWN_AGENT.value}]")
+    assert "No adapter registered" in text
+    assert "kimi" in text  # names a usable agent
 
 
 async def test_run_agent_forwards_model_into_context() -> None:
@@ -166,7 +172,9 @@ async def test_run_agent_returns_structured_error_on_invalid_model() -> None:
         "run_agent",
         {"agent_name": "rec-bad-model", "prompt": "p", "model": "--yolo"},
     )
-    assert content[0].text.startswith("error: Invalid model alias")
+    text = content[0].text
+    assert text.startswith(f"{ERROR_PREFIX} [{ErrorKind.INVALID_INPUT.value}]")
+    assert "Invalid model alias" in text
 
 
 async def test_run_review_loop_tool_returns_approve() -> None:

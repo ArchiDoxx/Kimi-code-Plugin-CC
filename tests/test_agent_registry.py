@@ -17,7 +17,10 @@ from kimi_code_plugin_cc.agent_registry import (
 )
 from kimi_code_plugin_cc.agent_registry.base import AgentAdapter
 from kimi_code_plugin_cc.agent_registry.codex import CodexAdapter
-from kimi_code_plugin_cc.agent_registry.kimi import is_resume_hint_event
+from kimi_code_plugin_cc.agent_registry.kimi import (
+    DEFAULT_MAX_PROMPT_CHARS,
+    is_resume_hint_event,
+)
 from kimi_code_plugin_cc.bridge.runner import RunResult
 from kimi_code_plugin_cc.protocol.messages import DEFAULT_MAX_DEPTH, AgentMessage
 
@@ -397,6 +400,142 @@ class TestModelSelection:
             result = await adapter.run("prompt", {})
         assert result.payload == EMPTY_RESPONSE_SENTINEL
         assert "approve" not in result.payload
+
+
+class TestPromptSizeGuard:
+    """The prompt travels as an argv element, so it has an OS-imposed ceiling."""
+
+    def _mocks(self):
+        return (
+            mock.patch(f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock),
+            mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
+        )
+
+    async def test_oversized_prompt_is_rejected_before_spawn(self) -> None:
+        adapter = KimiCodeAdapter()
+        oversized = "x" * (DEFAULT_MAX_PROMPT_CHARS + 1)
+        run_patch, which_patch = self._mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            pytest.raises(ValueError, match="above the"),
+        ):
+            await adapter.run(oversized, {})
+        # Nothing was spawned: the user gets an actionable message instead of an
+        # opaque OSError from CreateProcess.
+        mock_run.assert_not_called()
+
+    async def test_prompt_at_the_limit_is_accepted(self) -> None:
+        adapter = KimiCodeAdapter()
+        at_limit = "x" * DEFAULT_MAX_PROMPT_CHARS
+        run_patch, which_patch = self._mocks()
+        with run_patch as mock_run, which_patch:
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run(at_limit, {})
+        mock_run.assert_called_once()
+
+    async def test_limit_is_configurable(self) -> None:
+        adapter = KimiCodeAdapter()
+        run_patch, which_patch = self._mocks()
+        with (
+            mock.patch.dict(os.environ, {"KIMI_MAX_PROMPT_CHARS": "10"}, clear=False),
+            run_patch as mock_run,
+            which_patch,
+            pytest.raises(ValueError, match="10-character limit"),
+        ):
+            await adapter.run("x" * 11, {})
+        mock_run.assert_not_called()
+
+    async def test_garbage_limit_falls_back_to_default(self) -> None:
+        # A broken override must not silently disable the guard.
+        adapter = KimiCodeAdapter()
+        run_patch, which_patch = self._mocks()
+        with (
+            mock.patch.dict(
+                os.environ, {"KIMI_MAX_PROMPT_CHARS": "not-a-number"}, clear=False
+            ),
+            run_patch as mock_run,
+            which_patch,
+            pytest.raises(ValueError, match=f"{DEFAULT_MAX_PROMPT_CHARS}-character"),
+        ):
+            await adapter.run("x" * (DEFAULT_MAX_PROMPT_CHARS + 1), {})
+        mock_run.assert_not_called()
+
+
+class TestSkillsIsolation:
+    """Skills discovery makes reviews machine-dependent; isolation is opt-out."""
+
+    def _mocks(self):
+        return (
+            mock.patch(f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock),
+            mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
+        )
+
+    async def test_flag_is_added_when_cli_supports_it(self) -> None:
+        adapter = KimiCodeAdapter()
+        run_patch, which_patch = self._mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            mock.patch(f"{KIMI_MODULE}.supports_flag", return_value=True),
+        ):
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        argv = mock_run.call_args.args[0]
+        assert "--skills-dir" in argv
+        assert argv[argv.index("--skills-dir") + 1].endswith(".kimi-no-skills")
+
+    async def test_flag_is_omitted_when_cli_does_not_support_it(self) -> None:
+        # Fail-safe: an unknown flag would break every call on an older CLI.
+        adapter = KimiCodeAdapter()
+        run_patch, which_patch = self._mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            mock.patch(f"{KIMI_MODULE}.supports_flag", return_value=False),
+        ):
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        assert "--skills-dir" not in mock_run.call_args.args[0]
+
+    async def test_constructor_can_opt_out(self) -> None:
+        adapter = KimiCodeAdapter(isolate_skills=False)
+        run_patch, which_patch = self._mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            mock.patch(f"{KIMI_MODULE}.supports_flag", return_value=True) as probe,
+        ):
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        assert "--skills-dir" not in mock_run.call_args.args[0]
+        probe.assert_not_called()  # opting out must not cost a probe
+
+    async def test_env_var_can_opt_out(self) -> None:
+        adapter = KimiCodeAdapter()
+        run_patch, which_patch = self._mocks()
+        with (
+            mock.patch.dict(os.environ, {"KIMI_ISOLATE_SKILLS": "0"}, clear=False),
+            run_patch as mock_run,
+            which_patch,
+            mock.patch(f"{KIMI_MODULE}.supports_flag", return_value=True),
+        ):
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        assert "--skills-dir" not in mock_run.call_args.args[0]
+
+    async def test_no_worktree_means_no_isolation_dir(self) -> None:
+        # Without a working directory there is nowhere to put the empty dir.
+        adapter = KimiCodeAdapter(use_isolated_worktree=False)
+        run_patch, which_patch = self._mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            mock.patch(f"{KIMI_MODULE}.supports_flag", return_value=True),
+        ):
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        assert "--skills-dir" not in mock_run.call_args.args[0]
 
 
 class TestCodexAdapter:

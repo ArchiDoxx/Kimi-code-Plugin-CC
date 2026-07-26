@@ -7,6 +7,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from kimi_code_plugin_cc.agent_registry import get
+from kimi_code_plugin_cc.loops.prompts import review_prompt
 from kimi_code_plugin_cc.protocol.messages import AgentMessage, to_adapter_context
 
 DEFAULT_MAX_ITERATIONS = 3
@@ -30,18 +31,21 @@ class ReviewResult(BaseModel):
 
 
 def _build_initial_review_prompt(target: str) -> str:
-    verdicts = ", ".join(choice.value for choice in ReviewVerdict)
-    return (
-        "Review the following target. Respond with a verdict "
-        f"({verdicts}) and concise comments.\n\n"
-        f"On a final line, output exactly `VERDICT: <one of {verdicts}>` "
-        "so the verdict is machine-readable.\n\n"
+    return review_prompt(
+        "Review the following target and give concise, concrete comments.\n\n"
         f"Target:\n{target}"
     )
 
 
 def _build_refinement_prompt(target: str, previous_review: str, iteration: int) -> str:
-    return (
+    """Build the round-N prompt.
+
+    Goes through :func:`review_prompt` so the verdict contract is restated every
+    round. Before v1.4.0 this prompt omitted it, which meant every iteration
+    after the first was parsed by the free-text fallback rather than the
+    structured line.
+    """
+    return review_prompt(
         f"Refine your review (iteration {iteration}).\n\n"
         f"Previous review:\n{previous_review}\n\n"
         f"Target:\n{target}"
@@ -56,6 +60,15 @@ def _build_refinement_prompt(target: str, previous_review: str, iteration: int) 
 # we fall back to scanning free text — but with negation handling so that
 # "I do not approve" / "cannot approve" / "not approved" downgrades to
 # needs_discussion BEFORE the approve regex can match.
+#
+# AMBIGUITY RULE (v1.4.0): the santa loop's revision and adversarial prompts
+# paste the *other* reviewer's full text into the next prompt, so a reply can
+# legitimately end up containing more than one `VERDICT:` line — its own plus a
+# quoted one. Taking the first match (or the last) would silently adopt whichever
+# happened to land there, and in an adversarial loop that can turn a quoted
+# "approve" into this reviewer's verdict. We therefore collect ALL structured
+# lines: unanimous ones are honoured, conflicting ones resolve to
+# needs_discussion. Ambiguity is treated as disagreement, never as approval.
 #
 # NOTE on negation asymmetry: the negation guard covers only the APPROVE
 # direction (the dangerous one — a false approval). A negated non-approve
@@ -89,7 +102,10 @@ def extract_verdict(text: str) -> ReviewVerdict:
     """Parse a verdict from reviewer *text*, fail-closed.
 
     Preference order:
-    1. A structured ``VERDICT: <v>`` line (machine-readable, unambiguous).
+    1. Structured ``VERDICT: <v>`` lines (machine-readable). All of them are
+       collected: if they agree, that verdict wins outright; if they conflict
+       (e.g. the reply quoted another reviewer's line), the result is
+       ``needs_discussion`` — ambiguity is disagreement, never approval.
     2. Free-text scan with negation handling: any negated "approve" phrase
        forces ``needs_discussion`` before a bare ``approve`` can match.
     3. ``request_changes`` / ``needs_discussion`` take precedence over
@@ -98,10 +114,12 @@ def extract_verdict(text: str) -> ReviewVerdict:
     """
     lowered = text.lower()
 
-    # 1. Structured line wins outright.
-    structured = _STRUCTURED_VERDICT_RE.search(text)
+    # 1. Structured lines win outright — unless they contradict each other.
+    structured = {match.lower() for match in _STRUCTURED_VERDICT_RE.findall(text)}
+    if len(structured) == 1:
+        return ReviewVerdict(structured.pop())
     if structured:
-        return ReviewVerdict(structured.group(1).lower())
+        return ReviewVerdict.NEEDS_DISCUSSION
 
     # 2. Fail-closed precedence on free text.
     if _REQUEST_CHANGES_RE.search(lowered):

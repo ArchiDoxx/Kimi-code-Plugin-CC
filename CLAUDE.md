@@ -4,7 +4,7 @@ This is a Claude Code plugin that bridges headless CLI agents (starting with
 Kimi Code) into Claude Code as external subagents. Kimi Code is used as an
 **external reviewer / second opinion** for daily coding tasks. The design is
 scalable: add new agent adapters, review loops, and planning loops without
-changing the core. **Status: v1.3.0 — integration-ready, verified end-to-end
+changing the core. **Status: v1.4.0 — integration-ready, verified end-to-end
 on Windows.**
 
 ## Architecture
@@ -18,8 +18,19 @@ on Windows.**
 - `src/kimi_code_plugin_cc/protocol/` — Pydantic message schema with depth/bridge IDs.
 - `src/kimi_code_plugin_cc/agent_registry/` — adapter registry (`kimi` working,
   `codex` skeleton raising `NotImplementedError` in v1.0).
+- `src/kimi_code_plugin_cc/agent_registry/capabilities.py` — runtime detection of
+  what the installed CLI supports, cached per process and fail-safe (unknown =
+  not supported). Gate every flag beyond `-p`/`--output-format`/`-m` through it;
+  the CLI version is deliberately not pinned.
 - `src/kimi_code_plugin_cc/security/` — approval policy, worktree isolation.
 - `src/kimi_code_plugin_cc/loops/` — planning, review, and santa-loop logic.
+  `loops/prompts.py` holds the shared preamble and verdict contract: **every**
+  round builds through it, so no round can drop the contract (that bug made
+  iterations 2+ fall back to fuzzy parsing until v1.4.0).
+- `src/kimi_code_plugin_cc/errors.py` — the single error contract for the MCP
+  surface. Loop tools return their fail-closed verdict inside the error payload.
+- `src/kimi_code_plugin_cc/doctor.py` — preflight checks behind
+  `kimi-code-plugin doctor`.
 - `src/kimi_code_plugin_cc/mcp_server.py` — MCP server exposing `run_agent`,
   `run_review_loop`, `run_santa_loop`, `run_planning_loop`.
 - `skills/`, `agents/`, `commands/` — Claude Code plugin surface.
@@ -32,6 +43,10 @@ on Windows.**
 - Every agent runs in an isolated worktree under the system temp dir.
 - Depth-guard prevents recursive agent swarms (`KIMI_BRIDGE_DEPTH`, default 2).
 - Policy escalation above `KIMI_MAX_POLICY` requires human approval.
+- Fail-closed everywhere: unparseable, ambiguous, empty, timed-out and crashed
+  reviews all resolve to a non-approval. No failure path may yield `approve` or
+  `green` — that includes internal errors, which is why the loop MCP tools carry
+  their verdict inside the error payload.
 
 ## Development
 
@@ -39,11 +54,14 @@ on Windows.**
 - Run tests: `uv run pytest`
 - Run lint/format: `uv run ruff check . && uv run ruff format .`
 - Start MCP server: `uv run kimi-code-plugin-mcp`
+- Diagnose the environment: `uv run kimi-code-plugin doctor`
 
 ## Verified against
 
-- Kimi Code CLI `@moonshot-ai/kimi-code` **0.22.2**
-  (`kimi -p ... --output-format stream-json`; completion detected via the
+- Kimi Code CLI `@moonshot-ai/kimi-code` **0.29.1** (live-checked 2026-07-25;
+  `kimi -p ... --output-format stream-json`; completion detected via the
   terminal `session.resume_hint` event because the process does not exit on
-  its own when global MCP servers are configured).
-- Python ≥ 3.11.
+  its own when global MCP servers are configured). The plugin is not pinned to
+  this version — `tests/test_cli_contract.py` pins the flag surface instead, and
+  newer flags are capability-gated.
+- Python ≥ 3.11 (CI: 3.11–3.13 on Linux and Windows).
