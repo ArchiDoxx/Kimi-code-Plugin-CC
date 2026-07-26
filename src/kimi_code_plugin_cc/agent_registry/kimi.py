@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import re
 import shutil
 from pathlib import Path
 from typing import Any, cast
 
 from kimi_code_plugin_cc.agent_registry.capabilities import supports_flag
+from kimi_code_plugin_cc.agent_registry.common import (
+    assert_prompt_fits,
+    env_flag_enabled,
+    resolve_executable,
+    validate_model_alias,
+)
 from kimi_code_plugin_cc.bridge.runner import (
     DEPTH_ENV_VAR,
+    AuthEnv,
     RunResult,
     assert_spawn_allowed,
     run_agent_process,
@@ -38,6 +43,30 @@ DEFAULT_TIMEOUT_SECONDS = 600
 STREAM_OUTPUT_FORMAT = "stream-json"
 KIMI_EXECUTABLE = "kimi"
 
+# Install channel, reported when the CLI is not on PATH.
+INSTALL_HINT = (
+    "Install it with 'npm i -g @moonshot-ai/kimi-code', then run 'kimi --version'."
+)
+
+# Host credentials this agent may receive. Deliberately identical to the set
+# kimi has received since v1.0.0: scoping credentials per agent is a hardening
+# change, and quietly narrowing an existing agent's auth under cover of it
+# would be a silent breaking change.
+#
+# Kimi Code is Moonshot's CLI (API-key deployments use MOONSHOT_API_KEY) and
+# ANTHROPIC_* covers Anthropic-compatible endpoints. OPENAI_API_KEY stays
+# because kimi is multi-provider: the installed CLI bundles an OpenAI client
+# that reads that variable, so a config.toml provider routed through `-m` can
+# authenticate from it, and dropping it would break those runs mid-review.
+# Note it is the exact name, not the OPENAI_ prefix — kimi needs the key, not
+# codex's whole namespace. Non-secret KIMI_* config (KIMI_MAX_POLICY,
+# KIMI_ISOLATE_SKILLS) rides along on its prefix; harmless, and splitting it
+# would complicate auth passthrough for no gain.
+AUTH_ENV = AuthEnv(
+    prefixes=("KIMI_", "ANTHROPIC_", "MOONSHOT_"),
+    exact=frozenset({"API_KEY", "OPENAI_API_KEY"}),
+)
+
 # Returned when the CLI produces no usable text. Worded so a review loop reads
 # it as "needs discussion" (fail-safe), never as an approval.
 EMPTY_RESPONSE_SENTINEL = "needs_discussion: agent returned no parseable output"
@@ -54,22 +83,6 @@ NEVER_FLAGS = ("--yolo", "-y", "--auto", "--afk")
 # memory kimi-review-timeout-non-exit).
 _RESUME_HINT_TYPE = "session.resume_hint"
 
-# Model aliases (multi-provider setups route providers through config.toml
-# aliases like "glm-4.6" or "kimi-for-coding"). The charset is conservative
-# and the first character must be alphanumeric, so a model value can never
-# smuggle a CLI flag into the argv — same structural posture as NEVER_FLAGS.
-_MODEL_ALIAS_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
-
-# Prompt size guard. The prompt travels as an argv element (`-p <prompt>`), and
-# Windows caps a whole CreateProcess command line at 32767 characters. Callers
-# are told to paste file *contents* (the agent runs in an empty worktree and
-# cannot open host paths), so oversized prompts are easy to hit — and without
-# this guard they surface as an opaque OSError from the spawn instead of an
-# actionable message. The default leaves headroom for the executable path and
-# the remaining flags; override with KIMI_MAX_PROMPT_CHARS.
-_ENV_MAX_PROMPT_CHARS = "KIMI_MAX_PROMPT_CHARS"
-DEFAULT_MAX_PROMPT_CHARS = 30_000
-
 # Skills isolation. Without it the spawned agent auto-discovers the user's
 # global and project skill directories, so the same review can produce
 # different output on two machines. `--skills-dir <empty dir>` replaces
@@ -80,59 +93,11 @@ DEFAULT_MAX_PROMPT_CHARS = 30_000
 _ENV_ISOLATE_SKILLS = "KIMI_ISOLATE_SKILLS"
 _SKILLS_DIR_FLAG = "--skills-dir"
 _EMPTY_SKILLS_DIRNAME = ".kimi-no-skills"
-_FALSEY = frozenset({"0", "false", "no", "off"})
-
-
-def _max_prompt_chars() -> int:
-    """Return the configured prompt ceiling, falling back to the default.
-
-    A non-numeric or non-positive override is ignored rather than allowed to
-    disable the guard silently.
-    """
-    raw = os.environ.get(_ENV_MAX_PROMPT_CHARS)
-    if raw is None:
-        return DEFAULT_MAX_PROMPT_CHARS
-    try:
-        value = int(raw)
-    except ValueError:
-        return DEFAULT_MAX_PROMPT_CHARS
-    return value if value > 0 else DEFAULT_MAX_PROMPT_CHARS
 
 
 def _skills_isolation_enabled() -> bool:
     """Return True unless ``KIMI_ISOLATE_SKILLS`` is explicitly falsey."""
-    return os.environ.get(_ENV_ISOLATE_SKILLS, "1").strip().lower() not in _FALSEY
-
-
-def _assert_prompt_fits(prompt: str) -> None:
-    """Raise ValueError when *prompt* exceeds the argv budget.
-
-    Raised before anything is spawned so the caller gets an actionable message
-    ("review a smaller slice") instead of an opaque spawn failure. ValueError is
-    the same class the MCP layer already turns into a structured error.
-    """
-    limit = _max_prompt_chars()
-    length = len(prompt)
-    if length <= limit:
-        return
-    raise ValueError(
-        f"Prompt is {length} characters, above the {limit}-character limit. "
-        "The prompt is passed to the CLI as a command-line argument, which the "
-        "operating system caps (32767 characters on Windows). Review a smaller "
-        f"slice (one file or hunk at a time), or raise {_ENV_MAX_PROMPT_CHARS} "
-        "if your platform allows longer command lines."
-    )
-
-
-def _validate_model_alias(model: str) -> str:
-    """Return *model* if it is a safe CLI model alias, else raise ValueError."""
-    if not isinstance(model, str) or _MODEL_ALIAS_RE.fullmatch(model) is None:
-        raise ValueError(
-            f"Invalid model alias {model!r}: expected a config.toml alias "
-            "matching [A-Za-z0-9][A-Za-z0-9._:/-]* (no leading '-', no "
-            "whitespace or quotes)"
-        )
-    return model
+    return env_flag_enabled(_ENV_ISOLATE_SKILLS)
 
 
 def is_resume_hint_event(line: str) -> bool:
@@ -153,64 +118,6 @@ def is_resume_hint_event(line: str) -> bool:
         and obj.get("role") == "meta"
         and obj.get("type") == _RESUME_HINT_TYPE
     )
-
-
-# Regex to find a node entry-point (.mjs/.js) referenced inside a .cmd/.bat
-# npm shim. npm shims look like: ... "%dp0%\node_modules\<pkg>\dist\main.mjs" %*
-# We capture the path after the leading quote (optional) up to the extension.
-_SHIM_ENTRY_RE = re.compile(
-    r'["\']?(?P<path>(?:[A-Za-z]:[\\/]|[^"\']*?[\\/])?'
-    r'node_modules[\\/][^"\']+?\.(?:mjs|js|cjs))["\']?',
-    re.IGNORECASE,
-)
-
-
-def _deshim_cmd_wrapper(shim_path: Path) -> list[str] | None:
-    """Resolve a Windows ``.cmd``/``.bat`` npm shim to a direct ``node`` argv.
-
-    npm installs ``kimi.CMD`` (and similar) as batch shims that ultimately run
-    ``node <pkg>/dist/main.mjs %*`` through ``cmd.exe``. ``cmd.exe`` truncates
-    arguments at the first newline and caps lines near 8191 chars, which
-    silently breaks multi-line prompts.
-
-    This function reads the shim, locates the node entry-point (a
-    ``node_modules/.../*.mjs`` path, resolved relative to the shim's directory
-    if it uses ``%dp0%`` / ``%~dp0``), and returns ``["node", <abs entry>]``
-    so the caller can invoke node directly via ``CreateProcess``.
-
-    Returns ``None`` if *shim_path* is not a ``.cmd``/``.bat`` file or no
-    entry-point could be resolved — callers then fall back to running the
-    shim as-is (single-line behaviour stays correct).
-    """
-    if shim_path.suffix.lower() not in (".cmd", ".bat"):
-        return None
-    try:
-        text = shim_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-
-    match = _SHIM_ENTRY_RE.search(text)
-    if match is None:
-        return None
-
-    raw_path = match.group("path")
-    # Resolve npm's %dp0% / %~dp0 (the shim's own directory) if the path is
-    # relative to node_modules at the shim's location.
-    entry = Path(raw_path)
-    if not entry.is_absolute():
-        # Strip a possible leading %dp0%-style prefix or backslash.
-        cleaned = re.sub(r"^[%~dpDP0\\\/]+", "", raw_path)
-        entry = (shim_path.parent / cleaned).resolve()
-    else:
-        entry = entry.resolve()
-
-    if not entry.exists():
-        return None
-
-    # Prefer a node.exe next to the shim (npm layout), else rely on PATH.
-    local_node = shim_path.parent / "node.exe"
-    node_exec = str(local_node) if local_node.exists() else "node"
-    return [node_exec, str(entry)]
 
 
 class KimiCodeAdapter(AgentAdapter):
@@ -255,8 +162,8 @@ class KimiCodeAdapter(AgentAdapter):
         policy = self._resolve_policy(ctx)
         model = ctx.get("model", self._model)
         if model is not None:
-            model = _validate_model_alias(model)
-        _assert_prompt_fits(prompt)
+            model = validate_model_alias(model)
+        assert_prompt_fits(prompt)
 
         command = self._build_command(prompt, model)
         result = await self._execute(command, depth)
@@ -276,7 +183,7 @@ class KimiCodeAdapter(AgentAdapter):
     def _build_command(self, prompt: str, model: str | None = None) -> list[str]:
         """Construct the Kimi Code argv list without auto-approve flags.
 
-        ``model`` must already be validated by :func:`_validate_model_alias`;
+        ``model`` must already be validated by :func:`~.common.validate_model_alias`;
         when set it is passed as ``-m <alias>`` so multi-provider setups can
         route a run to a specific provider/model from config.toml.
         """
@@ -326,6 +233,7 @@ class KimiCodeAdapter(AgentAdapter):
                 max_depth=DEFAULT_MAX_DEPTH,
                 cwd=workdir,
                 early_exit_check=is_resume_hint_event,
+                auth_env=AUTH_ENV,
             )
         finally:
             if own_workdir is not None:
@@ -372,32 +280,17 @@ class KimiCodeAdapter(AgentAdapter):
         return [*argv, _SKILLS_DIR_FLAG, str(skills_dir)]
 
     def _resolve_executable(self, command: list[str]) -> list[str]:
-        """Resolve the first argument, de-shimming Windows ``.cmd``/``.bat`` wrappers.
+        """Resolve the first argument, de-shimming Windows ``.cmd``/``.bat``.
 
-        ``shutil.which("kimi")`` returns ``kimi.CMD`` on Windows — an npm
-        batch shim that ``cmd.exe`` executes. ``cmd.exe`` truncates every
-        argument at the first ``\\n`` and caps lines near 8191 chars, which
-        silently destroys multi-line prompts (every review/plan brief). The
-        shim ultimately runs ``node <pkg>/dist/main.mjs %*``.
-
-        To preserve newlines (and long prompts), we parse the shim, locate its
-        node entry-point (a ``.mjs``/``.js`` path relative to the shim dir),
-        and invoke ``node <entry> ...`` directly via ``CreateProcess`` (which
-        handles ``\\n`` and ~32767-char args correctly). If anything fails, we
-        fall back to the original resolved path so single-line behaviour keeps
-        working.
+        ``shutil.which("kimi")`` returns ``kimi.CMD`` on Windows — an npm batch
+        shim that ``cmd.exe`` executes, truncating every argument at the first
+        ``\\n``. See :func:`~.common.deshim_cmd_wrapper` for the full rationale
+        and the fallback behaviour.
         """
         if not command:
             return command
-        executable = shutil.which(command[0])
-        if executable is None:
-            raise FileNotFoundError(
-                f"Could not find executable for {command[0]!r} in PATH"
-            )
-        deshimed = _deshim_cmd_wrapper(Path(executable))
-        if deshimed is not None:
-            return [*deshimed, *command[1:]]
-        return [executable, *command[1:]]
+        prefix = resolve_executable(command[0], INSTALL_HINT)
+        return [*prefix, *command[1:]]
 
     def _resolve_workdir(self) -> Path | None:
         """Return the working directory for the agent subprocess.

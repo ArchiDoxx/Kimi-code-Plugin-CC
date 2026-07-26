@@ -8,6 +8,50 @@ match `.claude-plugin/plugin.json` / `pyproject.toml`.
 
 ### Added
 
+- **Working `codex` adapter** (`agent_registry/codex.py`): the OpenAI Codex CLI
+  is now a real second agent behind the bridge, not a skeleton. Use it through
+  the existing surface — `agent_name="codex"`, `/kimi-run codex "..."`,
+  `--agent codex`. `santa_loop(primary_agent="kimi",
+  adversary_agent="codex")` now gives a cross-vendor adversarial review with
+  no host reviewer; note that the `run_santa_loop` MCP tool still does not
+  expose `adversary_agent`, so that combination is reachable from the Python
+  API only. Command shape verified live against `codex-cli 0.145.0`:
+  `codex exec --sandbox <mode> --json -o <file> [gated flags] [-m <model>] --
+  <prompt>`.
+  - `codex exec` is batch and exits on its own, so unlike kimi it needs no
+    completion sentinel and no process-tree kill; the timeout is a pure
+    backstop.
+  - The answer is read from the `-o/--output-last-message` file, written to a
+    temp directory **outside** the agent's workspace. The `--json` stream is
+    kept for diagnostics only, so an upstream event-schema change cannot
+    corrupt a verdict. A missing or empty file is a failure even on exit 0 —
+    an empty answer can never read as an approval.
+  - Policy mapping is exact and capped: `read-only` -> `--sandbox read-only`,
+    `accept-edits` -> `--sandbox workspace-write` but only up to
+    `KIMI_MAX_POLICY`. `explicit` is refused (nothing can approve per-action
+    in a non-interactive run), and `danger-full-access` is unreachable because
+    it is not a plugin policy name.
+  - The structural auto-approve ban now covers codex:
+    `--dangerously-bypass-approvals-and-sandbox`,
+    `--dangerously-bypass-hook-trust` and `danger-full-access` are never
+    emitted — asserted for every policy/model/capability combination, and the
+    names are pinned against the real CLI so an upstream rename breaks the
+    build instead of silently unenforcing the ban.
+  - The prompt is passed after `--`, so a prompt starting with a hyphen stays a
+    positional value instead of being parsed as an unknown flag.
+  - `--skip-git-repo-check` (required: the isolated worktree is not a git
+    repository), plus `--ephemeral` and `--ignore-user-config` for
+    reproducibility, all capability-gated. Opt out of the latter two with
+    `KIMI_CODEX_ISOLATE_SESSION=0` if you rely on `config.toml` aliases.
+- `doctor` reports codex separately: absent is a `[warn]` (kimi remains the
+  primary agent, so preflight still passes), while an installed codex whose
+  flag surface has drifted is a `[FAIL]`.
+- `agent_registry/common.py`: guards shared by all adapters (prompt-size cap,
+  model-alias validation, Windows `.cmd` de-shimming, PATH resolution), moved
+  out of the kimi adapter so a second adapter reuses them instead of copying
+  them — a duplicated security guard is a defect waiting to drift.
+- `errors.AgentNotInstalledError` carries the *agent's own* install channel, so
+  a missing codex no longer tells you to install kimi.
 - **Loop run transcripts** (`transcript.py`): every review/santa/planning run
   persists a local transcript under
   `~/.kimi-code-plugin-cc/transcripts/<run_id>/` (a `run.json` summary plus
@@ -44,6 +88,26 @@ match `.claude-plugin/plugin.json` / `pyproject.toml`.
   on a user's machine. A hard `kimi --version` step prevents the contract test
   from skipping itself silently. Contract tier only — no credentials; a live
   round-trip tier can be added later via an API-key secret.
+
+### Changed
+
+- Child-process credentials are now scoped **per agent** instead of shared.
+  The runner's allowlist was global, so a codex review would have received
+  `MOONSHOT_API_KEY` and `ANTHROPIC_API_KEY` — credentials it has no use for.
+  Each adapter now declares its own set (`bridge.runner.AuthEnv`) and the
+  shared base carries only `PATH`-class variables; a caller that declares
+  nothing forwards no credentials at all. This matters because command
+  execution is permitted even under a read-only sandbox: a prompt-injected
+  agent could otherwise read another vendor's key out of its own environment
+  and quote it into its answer, which the loops then persist to a transcript.
+  **kimi's own set is unchanged** (`KIMI_*` / `ANTHROPIC_*` / `MOONSHOT_*` /
+  `API_KEY` / `OPENAI_API_KEY`) — it is multi-provider and the CLI bundles an
+  OpenAI client that reads `OPENAI_API_KEY`, so narrowing it under cover of a
+  hardening change would have silently broken those runs. codex receives
+  `OPENAI_*` and `CODEX_HOME` only.
+- `AdapterNotImplementedError` moved from `agent_registry/codex.py` to
+  `agent_registry/base.py`: it belongs to the adapter contract, and codex is no
+  longer a skeleton.
 
 ## [1.4.0] — 2026-07-25
 

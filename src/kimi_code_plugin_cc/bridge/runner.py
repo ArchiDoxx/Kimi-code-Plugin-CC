@@ -268,20 +268,12 @@ def _run_subprocess_streaming(
 
 
 # Child-process environment allowlist. Only these variables are forwarded to
-# the spawned agent; everything else from the host environment (including any
-# tokens/secrets) is dropped. This prevents a compromised or prompt-injected
-# agent from exfiltrating host secrets via `env`.
-#
-# - PATH / PATHEXT / SYSTEMROOT / COMSPEC / WINDIR / APPDATA: the child needs
-#   these to find its own executables and the kimi CLI on Windows.
-# - HOME / USERPROFILE / TMP / TEMP: standard runtime locations.
-# - KIMI_* / ANTHROPIC_* / MOONSHOT_*: explicit auth passthrough so the agent
-#   can authenticate (Kimi Code is Moonshot's CLI; API-key deployments use
-#   MOONSHOT_API_KEY). These prefixes carry auth tokens the CLI needs.
-#   (Non-secret KIMI_* config vars like KIMI_MAX_POLICY ride along — harmless
-#   and non-exploitable; tightening further would complicate auth passthrough.)
-# - API_KEY / OPENAI_API_KEY: common auth var names used by some CLIs.
-_ALLOWED_ENV_PREFIXES = ("KIMI_", "ANTHROPIC_", "MOONSHOT_")
+# every spawned agent; everything else from the host environment (including any
+# tokens/secrets) is dropped, so a compromised or prompt-injected agent cannot
+# exfiltrate host secrets via `env`. The set is deliberately credential-free —
+# PATH-class variables so the child can find its own executables (and the CLI
+# on Windows), plus standard runtime locations. Auth variables are
+# vendor-specific and are declared per agent; see AuthEnv below.
 _ALLOWED_ENV_EXACT = frozenset(
     {
         "PATH",
@@ -295,26 +287,66 @@ _ALLOWED_ENV_EXACT = frozenset(
         "USERPROFILE",
         "TMP",
         "TEMP",
-        "API_KEY",
-        "OPENAI_API_KEY",
     }
 )
 
 
-def _build_child_env(overrides: dict[str, str]) -> dict[str, str]:
+@dataclass(frozen=True)
+class AuthEnv:
+    """The host variables one agent is allowed to receive.
+
+    Each adapter declares its own vendor's variables. A single global auth
+    allowlist would hand every agent every vendor's credentials — and since
+    command execution is permitted even under a read-only sandbox, a
+    prompt-injected agent could read another vendor's key out of its own
+    environment and quote it into its answer, which the loops then persist to a
+    transcript.
+    """
+
+    prefixes: tuple[str, ...] = ()
+    exact: frozenset[str] = frozenset()
+
+    def allows(self, key: str) -> bool:
+        """Return True when *key* may be forwarded to this agent."""
+        return key in self.exact or key.startswith(self.prefixes)
+
+
+def _build_child_env(
+    overrides: dict[str, str], auth_env: AuthEnv | None
+) -> dict[str, str]:
     """Build a minimal child environment from the host env using an allowlist.
 
-    Only explicitly allowed variables and ``KIMI_*``/``ANTHROPIC_*``-prefixed
-    auth vars are forwarded, then *overrides* (e.g. ``KIMI_BRIDGE_DEPTH``) are
-    applied on top. This is the inverse of the previous "copy all of
-    ``os.environ``" behaviour and closes the secret-exfiltration gap.
+    Only the credential-free base set plus *auth_env*'s vendor-specific
+    variables are forwarded, then *overrides* (e.g. ``KIMI_BRIDGE_DEPTH``) are
+    applied on top. ``auth_env=None`` forwards no credentials at all — the safe
+    default for a caller that has not declared what its agent needs.
     """
+    allowed = auth_env or AuthEnv()
     child: dict[str, str] = {}
     for key, value in os.environ.items():
-        if key in _ALLOWED_ENV_EXACT or key.startswith(_ALLOWED_ENV_PREFIXES):
+        if key in _ALLOWED_ENV_EXACT or allowed.allows(key):
             child[key] = value
     child.update(overrides)
     return child
+
+
+def _guarded_child_env(
+    env: dict[str, str] | None,
+    max_depth: int | None,
+    auth_env: AuthEnv | None,
+) -> dict[str, str]:
+    """Enforce the depth guard and return the child's environment.
+
+    One decision, not two: the depth the child is told it runs at must be the
+    depth the guard approved. Raises before anything is spawned.
+    """
+    overrides = dict(env or {})
+    # The depth variable is authoritatively managed here; strip any
+    # caller-supplied value so the computed child_depth is not clobbered.
+    overrides.pop(DEPTH_ENV_VAR, None)
+    limit = DEFAULT_MAX_DEPTH if max_depth is None else max_depth
+    child_depth = assert_spawn_allowed(_get_current_depth(env), limit)
+    return _build_child_env({DEPTH_ENV_VAR: str(child_depth), **overrides}, auth_env)
 
 
 async def run_agent_process(
@@ -324,17 +356,16 @@ async def run_agent_process(
     max_depth: int | None = None,
     cwd: str | os.PathLike[str] | None = None,
     early_exit_check: Callable[[str], bool] | None = None,
+    auth_env: AuthEnv | None = None,
 ) -> RunResult:
     """Run a CLI agent asynchronously with depth-guard and timeout.
 
     The child environment is built from a minimal allowlist (plus the caller's
-    overrides) so host secrets are not forwarded. ``KIMI_BRIDGE_DEPTH`` is set
-    to the current depth + 1; if that exceeds *max_depth* (default
-    ``DEFAULT_MAX_DEPTH``), the call fails fast without spawning a process.
-
-    The actual process is run in a worker thread via :func:`asyncio.to_thread`
-    so it composes inside any event loop (MCP server, tests) without hitting
-    the Windows Proactor subprocess/stdio conflict.
+    overrides) so host secrets are not forwarded, and ``KIMI_BRIDGE_DEPTH`` is
+    set to the current depth + 1; exceeding *max_depth* fails fast without
+    spawning. The process itself runs in a worker thread via
+    :func:`asyncio.to_thread`, so it composes inside any event loop (MCP
+    server, tests) without hitting the Windows Proactor stdio conflict.
 
     Args:
         args: Argv list (already PATH-resolved by the caller on Windows).
@@ -345,23 +376,17 @@ async def run_agent_process(
         cwd: Optional working directory for the child process. Used for
             worktree isolation; the adapter passes an isolated temp dir.
         early_exit_check: Optional per-line stdout predicate. When it matches,
-            the run is considered complete: the child gets a short grace
-            period to exit, is then killed (whole process tree), and the
-            collected output is returned with ``early_exit=True``. Required
-            for agents like Kimi that print their answer but never exit when
-            long-lived MCP servers are configured. ``None`` keeps the plain
-            wait-for-exit behaviour.
+            the run is complete: the child gets a short grace period to exit,
+            is then killed (whole process tree), and the output is returned
+            with ``early_exit=True``. Required for agents like Kimi that print
+            their answer but never exit when long-lived MCP servers are
+            configured. ``None`` keeps the plain wait-for-exit behaviour.
+        auth_env: Which host credentials this agent may receive. Defaults to
+            none, so an adapter opts in to its own vendor's variables only.
     """
     if not args:
         raise ValueError("args must not be empty")
-    overrides = dict(env or {})
-    # The depth variable is authoritative-managed by this function; strip any
-    # caller-supplied value so the computed child_depth is not clobbered.
-    overrides.pop(DEPTH_ENV_VAR, None)
-    current_depth = _get_current_depth(env)
-    limit = DEFAULT_MAX_DEPTH if max_depth is None else max_depth
-    child_depth = assert_spawn_allowed(current_depth, limit)
-    merged_env = _build_child_env({DEPTH_ENV_VAR: str(child_depth), **overrides})
+    merged_env = _guarded_child_env(env, max_depth, auth_env)
 
     if early_exit_check is None:
         return await asyncio.to_thread(

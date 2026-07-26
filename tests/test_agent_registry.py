@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+from pathlib import Path
 from typing import Any
 from unittest import mock
 
@@ -16,15 +18,23 @@ from kimi_code_plugin_cc.agent_registry import (
     register,
 )
 from kimi_code_plugin_cc.agent_registry.base import AgentAdapter
+from kimi_code_plugin_cc.agent_registry.codex import AUTH_ENV as CODEX_AUTH_ENV
 from kimi_code_plugin_cc.agent_registry.codex import CodexAdapter
-from kimi_code_plugin_cc.agent_registry.kimi import (
-    DEFAULT_MAX_PROMPT_CHARS,
-    is_resume_hint_event,
+from kimi_code_plugin_cc.agent_registry.codex_contract import (
+    BANNED_SANDBOX_MODE,
+    ENV_ISOLATE_SESSION,
+    LAST_MESSAGE_FILENAME,
+    NEVER_FLAGS,
+    OUTPUT_FLAG,
 )
+from kimi_code_plugin_cc.agent_registry.common import DEFAULT_MAX_PROMPT_CHARS
+from kimi_code_plugin_cc.agent_registry.kimi import AUTH_ENV as KIMI_AUTH_ENV
+from kimi_code_plugin_cc.agent_registry.kimi import is_resume_hint_event
 from kimi_code_plugin_cc.bridge.runner import RunResult
 from kimi_code_plugin_cc.protocol.messages import DEFAULT_MAX_DEPTH, AgentMessage
 
 KIMI_MODULE = "kimi_code_plugin_cc.agent_registry.kimi"
+CODEX_MODULE = "kimi_code_plugin_cc.agent_registry.codex"
 
 
 def _run_result(
@@ -176,6 +186,20 @@ class TestKimiCodeAdapter:
         cwd = mock_run.call_args.kwargs["cwd"]
         assert cwd is not None
         assert "kimi_worktree_" in str(cwd)
+
+    async def test_run_declares_its_own_credentials_to_the_runner(self) -> None:
+        """Same wiring guarantee as for codex: the runner forwards nothing
+        unless the adapter says what its vendor needs."""
+        adapter = KimiCodeAdapter()
+        with (
+            mock.patch(
+                f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock
+            ) as mock_run,
+            mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
+        ):
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        assert mock_run.call_args.kwargs["auth_env"] is KIMI_AUTH_ENV
 
     async def test_run_passes_completion_check_to_runner(self) -> None:
         """Kimi prints its answer but may never exit (global MCP servers keep
@@ -538,12 +562,663 @@ class TestSkillsIsolation:
         assert "--skills-dir" not in mock_run.call_args.args[0]
 
 
+def _codex_runner(
+    payload: str = "REVIEW OK",
+    returncode: int = 0,
+    stderr: str = "",
+    write_last_message: bool = True,
+):
+    """Build a fake runner that behaves like a real ``codex exec`` invocation.
+
+    The real CLI writes its final answer to the ``-o`` file and exits, so the
+    fake does the same: tests that assert on the payload exercise the same
+    file-based path the adapter depends on, not a stdout shortcut.
+    """
+
+    async def _run(args: list[str], **kwargs: Any) -> RunResult:
+        if write_last_message:
+            out = Path(args[args.index(OUTPUT_FLAG) + 1])
+            out.write_text(payload, encoding="utf-8")
+        return RunResult(
+            returncode=returncode,
+            stdout="",
+            stderr=stderr,
+            args=list(args),
+            env={},
+        )
+
+    return _run
+
+
+def _codex_mocks(supports: bool = False):
+    """Patches shared by the codex tests: runner, PATH resolution, probe.
+
+    ``supports`` drives the capability probe; it defaults to False so the base
+    command shape is asserted without optional flags unless a test opts in.
+    """
+    return (
+        mock.patch(f"{CODEX_MODULE}.run_agent_process", new_callable=mock.AsyncMock),
+        mock.patch(f"{CODEX_MODULE}.shutil.which", return_value="/usr/bin/codex"),
+        mock.patch(f"{CODEX_MODULE}.supports_flag", return_value=supports),
+    )
+
+
 class TestCodexAdapter:
     def test_name(self) -> None:
-        adapter = CodexAdapter()
-        assert adapter.name == "codex"
+        assert CodexAdapter().name == "codex"
 
-    async def test_run_raises_not_implemented(self) -> None:
+    def test_custom_name(self) -> None:
+        assert CodexAdapter(name="codex-local").name == "codex-local"
+
+    async def test_run_uses_pinned_base_command_shape(self) -> None:
+        """Base argv, verified against codex-cli 0.145.0.
+
+        The prompt must be last and preceded by ``--``: without the separator
+        clap parses a prompt that starts with a hyphen as an unknown flag and
+        the run dies before it starts.
+        """
         adapter = CodexAdapter()
-        with pytest.raises(NotImplementedError):
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner(payload="hello")
+            result = await adapter.run("say hi", {"bridge_id": "b1", "depth": 1})
+
+        assert isinstance(result, AgentMessage)
+        assert result.bridge_id == "b1"
+        assert result.depth == 1
+        assert result.approval_policy == "read-only"
+        assert result.payload == "hello"
+
+        argv = mock_run.call_args.args[0]
+        assert argv[:2] == ["/usr/bin/codex", "exec"]
+        assert argv[-2:] == ["--", "say hi"]
+        assert argv[argv.index("--sandbox") + 1] == "read-only"
+        assert "--json" in argv
+        assert argv[argv.index(OUTPUT_FLAG) + 1].endswith(LAST_MESSAGE_FILENAME)
+
+        env = mock_run.call_args.kwargs["env"]
+        assert env["KIMI_BRIDGE_DEPTH"] == "1"
+        assert mock_run.call_args.kwargs["max_depth"] == DEFAULT_MAX_DEPTH
+
+    async def test_run_declares_its_own_credentials_to_the_runner(self) -> None:
+        """The wiring, not just the filter, has to be pinned.
+
+        `_build_child_env` is tested directly in test_bridge.py, but without
+        this assertion deleting `auth_env=AUTH_ENV` from the call would keep
+        every test green while the runner fell back to forwarding nothing —
+        breaking auth only in production.
+        """
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
             await adapter.run("prompt", {})
+        assert mock_run.call_args.kwargs["auth_env"] is CODEX_AUTH_ENV
+
+    async def test_run_waits_for_natural_exit(self) -> None:
+        """``codex exec`` is batch and exits on its own.
+
+        Unlike kimi it needs no completion sentinel; passing one would reap the
+        process tree early. The timeout stays as a pure backstop.
+        """
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {})
+        assert mock_run.call_args.kwargs.get("early_exit_check") is None
+
+    async def test_run_uses_isolated_worktree_by_default(self) -> None:
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {})
+        cwd = mock_run.call_args.kwargs["cwd"]
+        assert cwd is not None
+        assert "kimi_worktree_" in str(cwd)
+
+    async def test_last_message_file_lives_outside_the_workspace(self) -> None:
+        """The payload file must not sit inside the agent's writable workspace.
+
+        Under ``workspace-write`` a model-generated command could otherwise
+        overwrite the file the adapter treats as the authoritative answer.
+        """
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {})
+        argv = mock_run.call_args.args[0]
+        out_file = Path(argv[argv.index(OUTPUT_FLAG) + 1])
+        workdir = Path(mock_run.call_args.kwargs["cwd"])
+        assert workdir not in out_file.parents
+
+    async def test_temp_artifacts_are_cleaned_up(self) -> None:
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {})
+        argv = mock_run.call_args.args[0]
+        out_file = Path(argv[argv.index(OUTPUT_FLAG) + 1])
+        assert not out_file.parent.exists()
+        assert not Path(mock_run.call_args.kwargs["cwd"]).exists()
+
+    async def test_run_blocks_excessive_depth(self) -> None:
+        adapter = CodexAdapter()
+        with pytest.raises(RuntimeError, match="Depth guard blocked spawn"):
+            await adapter.run("prompt", {"depth": DEFAULT_MAX_DEPTH})
+
+    async def test_missing_cli_names_the_install_channel(self) -> None:
+        adapter = CodexAdapter()
+        with (
+            mock.patch(f"{CODEX_MODULE}.shutil.which", return_value=None),
+            pytest.raises(FileNotFoundError, match="@openai/codex"),
+        ):
+            await adapter.run("prompt", {})
+
+
+class TestCodexPolicyMapping:
+    """Plugin policy -> ``--sandbox`` value. The cap is the whole point."""
+
+    async def _sandbox_for(self, policy: str) -> str:
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {"approval_policy": policy})
+        argv = mock_run.call_args.args[0]
+        return argv[argv.index("--sandbox") + 1]
+
+    async def test_read_only_is_the_default(self) -> None:
+        assert await self._sandbox_for("read-only") == "read-only"
+
+    async def test_accept_edits_is_capped_to_read_only_by_default(self) -> None:
+        """KIMI_MAX_POLICY defaults to read-only, so escalation must not pass."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("KIMI_MAX_POLICY", None)
+            assert await self._sandbox_for("accept-edits") == "read-only"
+
+    async def test_accept_edits_maps_to_workspace_write_when_ceiling_allows(
+        self,
+    ) -> None:
+        with mock.patch.dict(os.environ, {"KIMI_MAX_POLICY": "accept-edits"}):
+            assert await self._sandbox_for("accept-edits") == "workspace-write"
+
+    async def test_explicit_is_refused_rather_than_faked(self) -> None:
+        """``codex exec`` is non-interactive: nobody can approve each action.
+
+        Recording a policy the CLI cannot enact is the defect this repo already
+        refuses for kimi; the same honesty rule applies here.
+        """
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            mock.patch.dict(os.environ, {"KIMI_MAX_POLICY": "explicit"}),
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(PermissionError, match="non-interactive"),
+        ):
+            await adapter.run("prompt", {"approval_policy": "explicit"})
+        mock_run.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "smuggled",
+        ["danger-full-access", "DANGER-FULL-ACCESS", "danger_full_access", "yolo"],
+    )
+    async def test_danger_full_access_is_unreachable(self, smuggled: str) -> None:
+        """No caller-supplied policy string may reach the dangerous sandbox."""
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            mock.patch.dict(os.environ, {"KIMI_MAX_POLICY": "accept-edits"}),
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(ValueError, match="Unknown approval policy"),
+        ):
+            await adapter.run("prompt", {"approval_policy": smuggled})
+        mock_run.assert_not_called()
+
+    async def test_writable_sandbox_requires_a_working_directory(self) -> None:
+        """A writable sandbox with cwd=None would make the HOST dir writable.
+
+        `--sandbox workspace-write` scopes writes to the process's working
+        directory. With worktree isolation off and no explicit worktree that is
+        the host's current directory, so a prompt-injected agent could edit the
+        code under review. The policy cap alone does not prevent it.
+        """
+        adapter = CodexAdapter(use_isolated_worktree=False)
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            mock.patch.dict(os.environ, {"KIMI_MAX_POLICY": "accept-edits"}),
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(PermissionError, match="workspace-write"),
+        ):
+            await adapter.run("prompt", {"approval_policy": "accept-edits"})
+        mock_run.assert_not_called()
+
+    async def test_writable_sandbox_is_allowed_inside_an_explicit_worktree(
+        self, tmp_path
+    ) -> None:
+        # A caller-supplied directory contains the writes, so it is permitted.
+        adapter = CodexAdapter(worktree=tmp_path)
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            mock.patch.dict(os.environ, {"KIMI_MAX_POLICY": "accept-edits"}),
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+        ):
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {"approval_policy": "accept-edits"})
+        argv = mock_run.call_args.args[0]
+        assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+
+    async def test_read_only_still_runs_without_a_working_directory(self) -> None:
+        # The containment rule must only bite for writable sandboxes.
+        adapter = CodexAdapter(use_isolated_worktree=False)
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {"approval_policy": "read-only"})
+        assert mock_run.call_args.kwargs["cwd"] is None
+
+    async def test_sandbox_allowlist_is_enforced_structurally(self) -> None:
+        """Defense in depth: the argv builder refuses an off-list sandbox mode.
+
+        Even if a future policy-mapping edit produced an unexpected value, the
+        command must not be built rather than silently widening the sandbox.
+        """
+        adapter = CodexAdapter()
+        with pytest.raises(ValueError, match="sandbox"):
+            adapter._build_base_command(
+                ["/usr/bin/codex"], BANNED_SANDBOX_MODE, Path("out.txt")
+            )
+
+
+class TestCodexBannedFlags:
+    """Invariant 2: auto-approve capabilities are never emitted, for any input."""
+
+    @pytest.mark.parametrize("policy", ["read-only", "accept-edits"])
+    @pytest.mark.parametrize("model", [None, "gpt-5-codex"])
+    @pytest.mark.parametrize("supports", [True, False])
+    async def test_never_flags_absent_for_every_input(
+        self, policy: str, model: str | None, supports: bool
+    ) -> None:
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks(supports=supports)
+        with (
+            mock.patch.dict(os.environ, {"KIMI_MAX_POLICY": "accept-edits"}),
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+        ):
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {"approval_policy": policy, "model": model})
+        argv = mock_run.call_args.args[0]
+        leaked = [f for f in (*NEVER_FLAGS, BANNED_SANDBOX_MODE) if f in argv]
+        assert not leaked, f"banned codex capability leaked into argv: {leaked}"
+
+    async def test_prompt_content_cannot_inject_a_banned_flag(self) -> None:
+        """A prompt is a single argv element after ``--``; it stays inert."""
+        adapter = CodexAdapter()
+        hostile = "--dangerously-bypass-approvals-and-sandbox"
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run(hostile, {})
+        argv = mock_run.call_args.args[0]
+        assert argv[-1] == hostile
+        assert argv[-2] == "--"
+        # The banned string appears exactly once, as the inert prompt payload.
+        assert argv.count(hostile) == 1
+
+
+class TestCodexPayload:
+    """Invariant 1: the last-message file is the only source of truth."""
+
+    async def test_payload_comes_from_the_last_message_file(self) -> None:
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner(payload="  verdict: approve  ")
+            result = await adapter.run("prompt", {})
+        assert result.payload == "verdict: approve"
+
+    async def test_missing_file_fails_even_on_exit_zero(self) -> None:
+        """Exit 0 with no answer is a failure, not an empty approval."""
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(RuntimeError, match="no final message"),
+        ):
+            mock_run.side_effect = _codex_runner(write_last_message=False)
+            await adapter.run("prompt", {})
+
+    async def test_empty_file_fails_closed(self) -> None:
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(RuntimeError, match="empty"),
+        ):
+            mock_run.side_effect = _codex_runner(payload="   \n  \n")
+            await adapter.run("prompt", {})
+
+    @pytest.mark.parametrize("failure_payload", ["", "   \n", "approve"])
+    async def test_failures_never_resolve_to_an_approval(
+        self, failure_payload: str
+    ) -> None:
+        """Even a file saying "approve" must not surface when the run failed."""
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(RuntimeError) as excinfo,
+        ):
+            mock_run.side_effect = _codex_runner(
+                payload=failure_payload, returncode=1, stderr="not logged in"
+            )
+            await adapter.run("prompt", {})
+        assert "not logged in" in str(excinfo.value)
+
+    async def test_nonzero_exit_carries_stderr_context(self) -> None:
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(RuntimeError, match="stream disconnected"),
+        ):
+            mock_run.side_effect = _codex_runner(
+                returncode=1, stderr="stream disconnected"
+            )
+            await adapter.run("prompt", {})
+
+    async def test_utf8_payload_survives_the_round_trip(self) -> None:
+        """The file is read with explicit UTF-8, not the Windows ANSI default."""
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner(payload="Prüfung — 完了")
+            result = await adapter.run("prompt", {})
+        assert result.payload == "Prüfung — 完了"
+
+
+class TestCodexModelAndPromptGuards:
+    """Reused kimi guards must apply to codex identically."""
+
+    async def test_model_from_context_lands_in_argv(self) -> None:
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {"model": "gpt-5-codex"})
+        argv = mock_run.call_args.args[0]
+        assert argv[argv.index("-m") + 1] == "gpt-5-codex"
+        # The model flag must stay in front of the argument separator.
+        assert argv.index("-m") < argv.index("--")
+
+    async def test_without_model_no_flag_is_emitted(self) -> None:
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {})
+        assert "-m" not in mock_run.call_args.args[0]
+
+    async def test_context_model_overrides_constructor_default(self) -> None:
+        adapter = CodexAdapter(model="gpt-5-codex")
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {"model": "o3"})
+        argv = mock_run.call_args.args[0]
+        assert argv[argv.index("-m") + 1] == "o3"
+
+    @pytest.mark.parametrize(
+        "bad_model",
+        [
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-m",
+            "gpt 5",
+            "",
+            'x"y',
+            "a\nb",
+        ],
+    )
+    async def test_invalid_model_is_rejected_before_spawn(self, bad_model: str) -> None:
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(ValueError, match="model"),
+        ):
+            await adapter.run("prompt", {"model": bad_model})
+        mock_run.assert_not_called()
+
+    async def test_oversized_prompt_is_rejected_before_spawn(self) -> None:
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(ValueError, match="above the"),
+        ):
+            await adapter.run("x" * (DEFAULT_MAX_PROMPT_CHARS + 1), {})
+        mock_run.assert_not_called()
+
+
+class TestCodexIsolation:
+    """Capability-gated flags: never emitted against a CLI that lacks them."""
+
+    async def _argv(self, adapter: CodexAdapter, supports: bool) -> list[str]:
+        run_patch, which_patch, probe_patch = _codex_mocks(supports=supports)
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {})
+        return mock_run.call_args.args[0]
+
+    async def test_flags_are_added_when_the_cli_supports_them(self) -> None:
+        argv = await self._argv(CodexAdapter(), supports=True)
+        assert "--ephemeral" in argv
+        assert "--ignore-user-config" in argv
+        assert "--skip-git-repo-check" in argv
+
+    async def test_flags_are_omitted_when_the_cli_lacks_them(self) -> None:
+        # Fail-safe: an unknown flag would break every call on an older CLI.
+        argv = await self._argv(CodexAdapter(), supports=False)
+        assert "--ephemeral" not in argv
+        assert "--ignore-user-config" not in argv
+        assert "--skip-git-repo-check" not in argv
+
+    async def test_constructor_can_opt_out_of_session_isolation(self) -> None:
+        argv = await self._argv(CodexAdapter(isolate_session=False), supports=True)
+        assert "--ephemeral" not in argv
+        assert "--ignore-user-config" not in argv
+        # The git-repo check is not part of the opt-out: the isolated worktree
+        # is never a git repository, so the run would fail without it.
+        assert "--skip-git-repo-check" in argv
+
+    async def test_env_var_can_opt_out_of_session_isolation(self) -> None:
+        with mock.patch.dict(os.environ, {ENV_ISOLATE_SESSION: "0"}, clear=False):
+            argv = await self._argv(CodexAdapter(), supports=True)
+        assert "--ephemeral" not in argv
+        assert "--ignore-user-config" not in argv
+
+    async def test_constructor_wins_over_the_env_opt_out(self) -> None:
+        with mock.patch.dict(os.environ, {ENV_ISOLATE_SESSION: "0"}, clear=False):
+            argv = await self._argv(CodexAdapter(isolate_session=True), supports=True)
+        assert "--ephemeral" in argv
+
+
+class TestCodexWorkdirAndDiagnostics:
+    """Worktree ownership and the diagnostics attached to a failed run."""
+
+    async def test_explicit_worktree_is_used_and_left_alone(self, tmp_path) -> None:
+        # A caller-supplied worktree is caller-managed: using it must not
+        # delete the caller's directory when the run finishes.
+        adapter = CodexAdapter(worktree=tmp_path)
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {})
+        assert mock_run.call_args.kwargs["cwd"] == tmp_path
+        assert tmp_path.exists()
+
+    async def test_worktree_isolation_can_be_disabled(self) -> None:
+        adapter = CodexAdapter(use_isolated_worktree=False)
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {})
+        assert mock_run.call_args.kwargs["cwd"] is None
+
+    async def test_failure_without_stderr_falls_back_to_stdout(self) -> None:
+        """codex reports some errors only on the JSONL stream, not on stderr."""
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+
+        async def _stdout_only(args: list[str], **kwargs: Any) -> RunResult:
+            return RunResult(
+                returncode=1,
+                stdout='{"type":"error","message":"model not found"}',
+                stderr="",
+                args=list(args),
+                env={},
+            )
+
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(RuntimeError, match="model not found"),
+        ):
+            mock_run.side_effect = _stdout_only
+            await adapter.run("prompt", {})
+
+    async def test_silent_failure_still_reports_something_actionable(self) -> None:
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(RuntimeError, match="no output on either stream"),
+        ):
+            mock_run.side_effect = _codex_runner(returncode=1, write_last_message=False)
+            await adapter.run("prompt", {})
+
+    async def test_no_temp_dir_leaks_when_setup_fails_midway(self) -> None:
+        """Regression: a failure between the two mkdtemp calls leaked a dir.
+
+        The output directory used to be created after the worktree and outside
+        the try, so an error in between skipped the cleanup entirely. In a
+        long-running MCP session those leaks accumulate silently.
+        """
+        adapter = CodexAdapter()
+        created: list[Path] = []
+        real_mkdtemp = tempfile.mkdtemp
+
+        def _tracking_mkdtemp(*args: Any, **kwargs: Any) -> str:
+            path = real_mkdtemp(*args, **kwargs)
+            created.append(Path(path))
+            return path
+
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            mock.patch(
+                f"{CODEX_MODULE}.tempfile.mkdtemp", side_effect=_tracking_mkdtemp
+            ),
+            mock.patch(
+                f"{CODEX_MODULE}.create_isolated_worktree",
+                side_effect=OSError("no space left on device"),
+            ),
+            pytest.raises(OSError, match="no space left"),
+        ):
+            await adapter.run("prompt", {})
+        mock_run.assert_not_called()
+        assert created, "expected the output directory to have been created"
+        assert not any(path.exists() for path in created), (
+            f"temp directories leaked after a failed setup: {created}"
+        )
+
+    async def test_cleanup_survives_a_failure_before_anything_was_created(
+        self,
+    ) -> None:
+        """The finally block must not itself blow up on the earliest failure.
+
+        If the very first mkdtemp fails, both directory handles are still None;
+        the cleanup has to tolerate that and let the original error surface.
+        """
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            mock.patch(
+                f"{CODEX_MODULE}.tempfile.mkdtemp",
+                side_effect=OSError("too many open files"),
+            ),
+            pytest.raises(OSError, match="too many open files"),
+        ):
+            await adapter.run("prompt", {})
+        mock_run.assert_not_called()
+
+    async def test_undecodable_final_message_is_an_agent_failure(self) -> None:
+        """Regression: UnicodeDecodeError is a ValueError, not an OSError.
+
+        Left unnamed it escaped the handler and was classified as
+        'invalid_input' — blaming the caller for bytes the agent wrote.
+        """
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+
+        async def _writes_binary(args: list[str], **kwargs: Any) -> RunResult:
+            Path(args[args.index(OUTPUT_FLAG) + 1]).write_bytes(b"\xff\xfe\x00bad")
+            return RunResult(
+                returncode=0, stdout="", stderr="", args=list(args), env={}
+            )
+
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(RuntimeError, match="no final message"),
+        ):
+            mock_run.side_effect = _writes_binary
+            await adapter.run("prompt", {})
+
+    async def test_non_string_policy_is_rejected_before_spawn(self) -> None:
+        # A caller passing e.g. an enum member or None must get a clear
+        # invalid-input error, not an AttributeError from deep in the resolver.
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(ValueError, match="must be a string"),
+        ):
+            await adapter.run("prompt", {"approval_policy": 0})
+        mock_run.assert_not_called()

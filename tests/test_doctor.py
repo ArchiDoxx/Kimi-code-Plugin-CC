@@ -22,6 +22,21 @@ HELP_WITHOUT_SKILLS_DIR = HELP_WITH_ALL_FLAGS.replace(
     "  --skills-dir <dir>        Load skills from this directory\n", ""
 )
 
+# A `codex exec --help` excerpt covering the surface the adapter depends on.
+CODEX_EXEC_HELP = (
+    "  -m, --model <MODEL>              Model the agent should use\n"
+    "  -s, --sandbox <SANDBOX_MODE>     [possible values: read-only, "
+    "workspace-write, danger-full-access]\n"
+    "      --json                       Print events to stdout as JSONL\n"
+    "  -o, --output-last-message <FILE> Where the last message is written\n"
+    "      --ephemeral                  Run without persisting session files\n"
+    "      --ignore-user-config         Do not load $CODEX_HOME/config.toml\n"
+    "      --skip-git-repo-check        Allow running outside a Git repository\n"
+)
+CODEX_EXEC_HELP_WITHOUT_OUTPUT = CODEX_EXEC_HELP.replace(
+    "  -o, --output-last-message <FILE> Where the last message is written\n", ""
+)
+
 
 def _find(checks: list[Check], name: str) -> Check:
     return next(check for check in checks if check.name == name)
@@ -30,12 +45,32 @@ def _find(checks: list[Check], name: str) -> Check:
 def _healthy_cli(
     help_output: str = HELP_WITH_ALL_FLAGS,
     version: str | None = "0.29.1",
+    codex_help: str | None = None,
 ):
+    """Patch the doctor's CLI probes.
+
+    ``codex_help`` is ``None`` by default so codex reads as *not installed* —
+    the common case, and the one the kimi-focused assertions below rely on.
+    Passing a help string makes codex present and drives its flag checks.
+    """
+
+    def _which(name: str) -> str | None:
+        if name == "kimi":
+            return "/usr/bin/kimi"
+        if name == "codex" and codex_help is not None:
+            return "/usr/bin/codex"
+        return None
+
+    def _help(prefix: list[str]) -> str:
+        # The codex flag surface lives under the `exec` subcommand, so the
+        # doctor probes `codex exec --help`, not `codex --help`.
+        return (codex_help or "") if "exec" in prefix else help_output
+
     return (
-        mock.patch(f"{DOCTOR_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
-        mock.patch(f"{DOCTOR_MODULE}._deshim_cmd_wrapper", return_value=None),
+        mock.patch(f"{DOCTOR_MODULE}.shutil.which", side_effect=_which),
+        mock.patch(f"{DOCTOR_MODULE}.deshim_cmd_wrapper", return_value=None),
         mock.patch(f"{DOCTOR_MODULE}.cli_version", return_value=version),
-        mock.patch(f"{DOCTOR_MODULE}.help_text", return_value=help_output),
+        mock.patch(f"{DOCTOR_MODULE}.help_text", side_effect=_help),
     )
 
 
@@ -94,6 +129,92 @@ class TestRunChecks:
             checks = run_checks()
         assert _find(checks, "flag surface").status == "fail"
         assert _find(checks, "CLI version").status == "warn"
+
+
+class TestCodexChecks:
+    """codex is the optional second agent: absent is a warning, broken is fatal."""
+
+    def test_absent_codex_only_warns_and_keeps_doctor_green(self) -> None:
+        # kimi remains the primary agent, so a machine without codex is ready.
+        which, deshim, version, help_ = _healthy_cli()
+        with which, deshim, version, help_:
+            checks = run_checks()
+        codex = _find(checks, "codex CLI")
+        assert codex.status == "warn"
+        assert "optional" in codex.detail.lower()
+        assert has_failure(checks) is False
+
+    def test_absent_codex_names_the_install_channel(self) -> None:
+        which, deshim, version, help_ = _healthy_cli()
+        with which, deshim, version, help_:
+            checks = run_checks()
+        assert "@openai/codex" in _find(checks, "codex CLI").detail
+
+    def test_present_codex_reports_its_flag_surface(self) -> None:
+        which, deshim, version, help_ = _healthy_cli(codex_help=CODEX_EXEC_HELP)
+        with which, deshim, version, help_:
+            checks = run_checks()
+        assert _find(checks, "codex CLI").status == "ok"
+        assert _find(checks, "codex flag surface").status == "ok"
+        assert has_failure(checks) is False
+
+    def test_installed_codex_missing_a_base_flag_is_fatal(self) -> None:
+        # An installed-but-incompatible CLI breaks every codex run, so unlike
+        # absence it must not be downgraded to a warning.
+        which, deshim, version, help_ = _healthy_cli(
+            codex_help=CODEX_EXEC_HELP_WITHOUT_OUTPUT
+        )
+        with which, deshim, version, help_:
+            checks = run_checks()
+        flag_check = _find(checks, "codex flag surface")
+        assert flag_check.status == "fail"
+        assert "--output-last-message" in flag_check.detail
+        assert has_failure(checks) is True
+
+    def test_unreadable_codex_help_is_fatal(self) -> None:
+        which, deshim, version, help_ = _healthy_cli(codex_help="")
+        with which, deshim, version, help_:
+            checks = run_checks()
+        # An empty help string means the CLI is on PATH but not answering;
+        # that cannot be distinguished from a drifted flag surface, so fail.
+        assert _find(checks, "codex flag surface").status == "fail"
+
+    def test_codex_isolation_support_is_reported(self) -> None:
+        which, deshim, version, help_ = _healthy_cli(codex_help=CODEX_EXEC_HELP)
+        with which, deshim, version, help_:
+            checks = run_checks()
+        assert _find(checks, "codex isolation").status == "ok"
+
+    def test_codex_without_skip_git_repo_check_is_fatal(self) -> None:
+        """Its absence breaks every default run, so it is not a warning.
+
+        The isolated worktree is never a git repository, so a codex that
+        cannot skip the repo check refuses to start — exactly the class of
+        breakage doctor exists to catch before the first review.
+        """
+        stripped = CODEX_EXEC_HELP.replace(
+            "      --skip-git-repo-check        Allow running outside a Git "
+            "repository\n",
+            "",
+        )
+        which, deshim, version, help_ = _healthy_cli(codex_help=stripped)
+        with which, deshim, version, help_:
+            checks = run_checks()
+        flag_check = _find(checks, "codex flag surface")
+        assert flag_check.status == "fail"
+        assert "--skip-git-repo-check" in flag_check.detail
+        assert has_failure(checks) is True
+
+    def test_codex_without_isolation_flags_only_warns(self) -> None:
+        stripped = CODEX_EXEC_HELP.replace(
+            "      --ephemeral                  Run without persisting session files\n",
+            "",
+        )
+        which, deshim, version, help_ = _healthy_cli(codex_help=stripped)
+        with which, deshim, version, help_:
+            checks = run_checks()
+        assert _find(checks, "codex isolation").status == "warn"
+        assert has_failure(checks) is False
 
 
 class TestReport:

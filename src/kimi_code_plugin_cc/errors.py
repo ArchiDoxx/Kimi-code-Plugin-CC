@@ -24,6 +24,27 @@ from typing import Any
 ERROR_PREFIX = "kimi-code-plugin-cc error"
 
 
+class AgentNotInstalledError(FileNotFoundError):
+    """Raised when a specific agent CLI cannot be resolved on PATH.
+
+    A plain ``FileNotFoundError`` carries no clue about *which* agent is
+    missing, so the generic hint below can only ever name one CLI. With more
+    than one adapter that becomes actively misleading — telling a codex user to
+    install kimi. This subclass carries the agent's own install instruction in
+    its message, and :func:`classify` then suppresses the generic hint.
+
+    It remains a ``FileNotFoundError`` so existing ``except OSError`` handlers
+    and the ``not_installed`` classification keep working unchanged.
+    """
+
+    def __init__(self, executable: str, install_hint: str) -> None:
+        self.executable = executable
+        self.install_hint = install_hint
+        super().__init__(
+            f"Could not find executable {executable!r} in PATH. {install_hint}"
+        )
+
+
 class ErrorKind(StrEnum):
     """Stable, machine-readable failure categories."""
 
@@ -38,6 +59,9 @@ class ErrorKind(StrEnum):
 
 
 _HINTS = {
+    # Fallback only: raised for a bare FileNotFoundError, which cannot say
+    # which CLI is missing. Adapters raise AgentNotInstalledError instead and
+    # supply their own channel (see _hint_for).
     ErrorKind.NOT_INSTALLED: (
         "Install the agent CLI and make sure it is on PATH "
         "(npm i -g @moonshot-ai/kimi-code), then run 'kimi --version'."
@@ -48,6 +72,17 @@ _HINTS = {
         "a smaller target, or check that the CLI is authenticated."
     ),
 }
+
+
+def _hint_for(kind: ErrorKind, exc: BaseException) -> str | None:
+    """Return the hint to append to *exc*'s message, if any.
+
+    An :class:`AgentNotInstalledError` already names its own install channel,
+    so appending the generic one would contradict it.
+    """
+    if isinstance(exc, AgentNotInstalledError):
+        return None
+    return _HINTS.get(kind)
 
 
 def classify(exc: BaseException) -> tuple[ErrorKind, str]:
@@ -77,7 +112,7 @@ def classify(exc: BaseException) -> tuple[ErrorKind, str]:
     # KeyError's str() is the repr of the key; use the argument directly so the
     # message reads as prose rather than as a quoted key.
     message = str(exc.args[0]) if isinstance(exc, KeyError) and exc.args else str(exc)
-    hint = _HINTS.get(kind)
+    hint = _hint_for(kind, exc)
     return kind, f"{message} {hint}".strip() if hint else message
 
 

@@ -54,8 +54,16 @@ my review fail" questions before you hit them.
   (Kimi, GLM, …). Model values are validated so they can never inject flags.
   On the slash-command surface, append the alias in square brackets —
   `/kimi-code-review src/foo.py [glm-4.6]` — to pick the model per call.
-- Extensible agent registry: `kimi` (working adapter), `codex` (skeleton, raises
-  `NotImplementedError` in v1.0 — present only to validate the abstraction).
+- **Extensible agent registry — two working adapters**: `kimi`
+  (`@moonshot-ai/kimi-code`) and `codex` (OpenAI's `codex exec`). Pick one per
+  call: `/kimi-run codex "..."`, or `--agent codex` on `/kimi-review`. Both
+  flow through the same MCP tools, loops, policy cap and error contract.
+  `santa_loop(primary_agent="kimi", adversary_agent="codex")` gives a
+  cross-vendor adversarial review from the Python API; the `run_santa_loop`
+  MCP tool does not expose `adversary_agent` yet, so through MCP the second
+  reviewer is still the external-adversary fallback or Claude as host
+  reviewer. codex is optional: without it installed everything else works and
+  `doctor` reports a warning, not a failure.
 - Single async execution path: adapters `await` one shared, depth-guarded
   runner, so the same code works in tests and inside the MCP event loop.
 - **Windows-safe subprocess runner**: spawns the agent in a worker thread with
@@ -260,6 +268,7 @@ does not match the alias charset.
 | `KIMI_WORKTREE_BASE` | system temp | Base directory for isolated agent worktrees. |
 | `KIMI_MAX_PROMPT_CHARS` | `30000` | Prompt ceiling. The prompt is passed as a command-line argument, which the OS caps (32767 characters on Windows); oversized prompts are rejected with an actionable message instead of an opaque spawn failure. |
 | `KIMI_ISOLATE_SKILLS` | `1` | Run the agent with skills discovery disabled so reviews are reproducible across machines. Set to `0` to let it load the host's skills. |
+| `KIMI_CODEX_ISOLATE_SESSION` | `1` | codex only: run with `--ephemeral --ignore-user-config`, so reviews are reproducible and your `~/.codex` session store stays clean. Set to `0` if you rely on model aliases or custom providers defined in `config.toml` — that file is skipped while isolation is on (auth still uses `CODEX_HOME`). |
 | `KIMI_TRANSCRIPTS` | `1` (on) | `0`/`false` disables transcript recording entirely. |
 | `KIMI_TRANSCRIPT_DIR` | `~/.kimi-code-plugin-cc/transcripts` | Base directory override for loop transcripts. |
 | `KIMI_TRANSCRIPT_KEEP` | `50` | Newest N run directories kept; older ones are pruned at the start of a run. |
