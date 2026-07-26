@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 from unittest import mock
 
@@ -211,3 +212,35 @@ async def test_run_planning_loop_tool_returns_plan() -> None:
     payload = json.loads(content[0].text)
     assert "step one" in payload["plan"]
     assert payload["iterations"] == 1
+
+
+async def test_run_review_loop_result_carries_transcript_dir_key() -> None:
+    # conftest forces KIMI_TRANSCRIPTS=0, so recording is off and the
+    # serialized result must expose the key with a null value.
+    register("stub-review-t", StubAdapter("stub-review-t", "approve looks good"))
+    server = create_server()
+    content, _meta = await server.call_tool(
+        "run_review_loop",
+        {"agent_name": "stub-review-t", "target": "src/x.py", "max_iterations": 1},
+    )
+    payload = json.loads(content[0].text)
+    assert "transcript_dir" in payload
+    assert payload["transcript_dir"] is None
+
+
+async def test_run_review_loop_transcript_dir_points_into_base_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("KIMI_TRANSCRIPT_DIR", str(tmp_path))
+    monkeypatch.delenv("KIMI_TRANSCRIPTS", raising=False)
+    register("stub-review-t2", StubAdapter("stub-review-t2", "approve looks good"))
+    server = create_server()
+    content, _meta = await server.call_tool(
+        "run_review_loop",
+        {"agent_name": "stub-review-t2", "target": "src/x.py", "max_iterations": 1},
+    )
+    payload = json.loads(content[0].text)
+    assert payload["transcript_dir"] is not None
+    run_dir = Path(payload["transcript_dir"])
+    assert run_dir.parent == tmp_path
+    assert (run_dir / "run.json").is_file()
