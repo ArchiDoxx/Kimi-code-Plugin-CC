@@ -9,10 +9,10 @@ recorder for the rest of the run, and :meth:`TranscriptRecorder.start` returns
 
 Configuration is read from the environment at call time (never at import):
 
-- ``KIMI_TRANSCRIPTS`` — ``0``/``false``/``no``/``off`` disables recording.
-- ``KIMI_TRANSCRIPT_DIR`` — base directory override (default
+- ``KIMI_TRANSCRIPTS`` - ``0``/``false``/``no``/``off`` disables recording.
+- ``KIMI_TRANSCRIPT_DIR`` - base directory override (default
   ``~/.kimi-code-plugin-cc/transcripts``).
-- ``KIMI_TRANSCRIPT_KEEP`` — newest N run directories kept (default 50);
+- ``KIMI_TRANSCRIPT_KEEP`` - newest N run directories kept (default 50);
   older runs are pruned at start, best-effort.
 """
 
@@ -117,9 +117,12 @@ class TranscriptRecorder:
     disables itself and all further calls are no-ops.
     """
 
-    def __init__(self, run_dir: Path, run_id: str, meta: dict[str, object]) -> None:
+    def __init__(
+        self, run_dir: Path, run_id: str, loop: str, meta: dict[str, object]
+    ) -> None:
         self._run_dir = run_dir
         self._run_id = run_id
+        self._loop = loop
         self._meta = dict(meta)
         self._started = _utc_now()
         self._finished: str | None = None
@@ -145,7 +148,7 @@ class TranscriptRecorder:
             run_id = f"{timestamp}-{loop}-{secrets.token_hex(3)}"
             run_dir = base / run_id
             run_dir.mkdir()
-            recorder = cls(run_dir, run_id, meta)
+            recorder = cls(run_dir, run_id, loop, meta)
             recorder._write_run_json()
         except Exception:
             logger.warning("transcript recording unavailable", exc_info=True)
@@ -230,12 +233,14 @@ class TranscriptRecorder:
         """Atomically rewrite the run summary (tmp file + os.replace).
 
         The ``meta`` mapping passed to :meth:`start` is copied in verbatim
-        under its own keys; the recorder adds only the bookkeeping fields.
+        under its own keys; the recorder adds the bookkeeping fields, which
+        win over meta keys on collision.
         """
         data: dict[str, object] = {
             **self._meta,
             "schema_version": SCHEMA_VERSION,
             "run_id": self._run_id,
+            "loop": self._loop,
             "started": self._started,
             "rounds": list(self._rounds),
         }

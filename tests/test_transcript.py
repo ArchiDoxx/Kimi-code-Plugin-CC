@@ -46,6 +46,20 @@ def test_start_creates_run_dir_and_initial_run_json(
     assert data["started"].endswith("Z")
 
 
+def test_run_json_loop_comes_from_recorder_not_meta(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("KIMI_TRANSCRIPT_DIR", str(tmp_path))
+    monkeypatch.delenv("KIMI_TRANSCRIPTS", raising=False)
+    meta = {k: v for k, v in _META.items() if k != "loop"}
+
+    recorder = TranscriptRecorder.start("santa", meta)
+    assert recorder is not None
+
+    data = json.loads((Path(recorder.path) / "run.json").read_text(encoding="utf-8"))
+    assert data["loop"] == "santa"
+
+
 def test_start_returns_none_when_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
