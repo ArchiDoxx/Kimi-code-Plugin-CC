@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -462,3 +464,198 @@ class TestPromptContract:
         await planning_loop("preamble-plan", "task", max_iterations=2)
         for prompt, _ctx in stub._calls:
             assert prompt.startswith(STANDALONE_PREAMBLE)
+
+
+class CrashAdapter(StubAdapter):
+    """Stub adapter that raises on a programmed call number (1-based)."""
+
+    def __init__(self, name: str, responses: list[str], fail_on_call: int) -> None:
+        super().__init__(name, responses)
+        self._fail_on_call = fail_on_call
+
+    async def run(self, prompt: str, context: dict[str, Any]) -> AgentMessage:
+        if len(self._calls) + 1 == self._fail_on_call:
+            self._calls.append((prompt, context))
+            raise RuntimeError("adapter exploded")
+        return await super().run(prompt, context)
+
+
+def _enable_transcripts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point recording at *tmp_path* and undo the conftest-wide disable."""
+    monkeypatch.setenv("KIMI_TRANSCRIPT_DIR", str(tmp_path))
+    monkeypatch.delenv("KIMI_TRANSCRIPTS", raising=False)
+
+
+def _round_files(run_dir: str) -> list[str]:
+    return sorted(p.name for p in Path(run_dir).glob("round-*.md"))
+
+
+def _run_json(run_dir: str) -> dict[str, Any]:
+    return json.loads((Path(run_dir) / "run.json").read_text(encoding="utf-8"))
+
+
+class TestLoopTranscripts:
+    """The loops persist one on-disk transcript per run when recording is on.
+
+    Recording must be purely additive: identical verdicts/reviews whether the
+    recorder is off, on, or broken, and a crashed run keeps its partial
+    transcript on disk.
+    """
+
+    async def test_review_loop_records_every_round(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_transcripts(tmp_path, monkeypatch)
+        adapter = StubAdapter(
+            "t-review", ["needs_discussion one", "request_changes two"]
+        )
+        register("t-review", adapter)
+
+        result = await review_loop("t-review", "src/x.py", max_iterations=2)
+
+        assert result.transcript_dir is not None
+        run_dir = Path(result.transcript_dir)
+        assert run_dir.parent == tmp_path
+        assert _round_files(result.transcript_dir) == [
+            "round-01-review.md",
+            "round-02-review.md",
+        ]
+        data = _run_json(result.transcript_dir)
+        assert data["final"] == {"verdict": "request_changes", "iterations": 2}
+        assert data["agent"] == "t-review"
+        assert data["max_iterations"] == 2
+
+    async def test_transcript_dir_is_none_when_recording_disabled(self) -> None:
+        # The conftest fixture sets KIMI_TRANSCRIPTS=0 for this test.
+        adapter = StubAdapter("t-review-off", ["approve ok"])
+        register("t-review-off", adapter)
+        result = await review_loop("t-review-off", "target", max_iterations=1)
+        assert result.transcript_dir is None
+
+    async def test_santa_loop_records_primary_and_adversary_rounds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_transcripts(tmp_path, monkeypatch)
+        adapter = StubAdapter("t-santa", ["request_changes nope"])
+        register("t-santa", adapter)
+
+        result = await santa_loop(
+            "t-santa", "src/z.py", max_iterations=2, adversary_agent="t-santa"
+        )
+
+        assert result.verdict == SantaVerdict.RED
+        assert result.transcript_dir is not None
+        # Only the top-level result carries the path, not the nested reviews.
+        assert result.primary_review.transcript_dir is None
+        assert result.secondary_review.transcript_dir is None
+        assert _round_files(result.transcript_dir) == [
+            "round-01-adversary.md",
+            "round-01-primary.md",
+            "round-02-adversary.md",
+            "round-02-primary.md",
+        ]
+        data = _run_json(result.transcript_dir)
+        assert data["final"] == {"verdict": "red", "iterations": 2}
+        assert data["agents"] == {"primary": "t-santa", "adversary": "t-santa"}
+
+    async def test_santa_loop_records_host_reviewer_as_host(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_transcripts(tmp_path, monkeypatch)
+        adapter = StubAdapter("t-santa-host", ["approve perfect"])
+        register("t-santa-host", adapter)
+
+        def host_approves(_target: str, _primary: ReviewResult) -> ReviewResult:
+            return ReviewResult(
+                review="host approves",
+                verdict=ReviewVerdict.APPROVE,
+                iterations=1,
+                final_message=AgentMessage(bridge_id="host", payload="host approves"),
+            )
+
+        result = await santa_loop(
+            "t-santa-host", "src/z.py", max_iterations=1, host_reviewer=host_approves
+        )
+
+        assert result.verdict == SantaVerdict.GREEN
+        assert result.transcript_dir is not None
+        adversary_file = Path(result.transcript_dir) / "round-01-adversary.md"
+        text = adversary_file.read_text(encoding="utf-8")
+        assert "- agent: host" in text
+        assert "[host callback]" in text
+        assert "host approves" in text
+        data = _run_json(result.transcript_dir)
+        assert data["final"] == {"verdict": "green", "iterations": 1}
+
+    async def test_crash_keeps_partial_transcript(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_transcripts(tmp_path, monkeypatch)
+        adapter = CrashAdapter("t-crash", ["needs_discussion hmm"], fail_on_call=2)
+        register("t-crash", adapter)
+
+        # The exception propagates unchanged, same as without recording.
+        with pytest.raises(RuntimeError, match="adapter exploded"):
+            await review_loop("t-crash", "target", max_iterations=3)
+
+        run_dirs = [p for p in tmp_path.iterdir() if p.is_dir()]
+        assert len(run_dirs) == 1
+        # Round 1 was written before the crash; round 2 never happened.
+        assert (run_dirs[0] / "round-01-review.md").exists()
+        assert not (run_dirs[0] / "round-02-review.md").exists()
+        data = json.loads((run_dirs[0] / "run.json").read_text(encoding="utf-8"))
+        assert "adapter exploded" in data["final"]["error"]
+
+    async def test_broken_recorder_does_not_change_the_result(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        responses = ["needs_discussion one", "request_changes two"]
+
+        # Baseline: recording disabled (conftest default).
+        adapter_off = StubAdapter("t-eq-off", list(responses))
+        register("t-eq-off", adapter_off)
+        disabled = await review_loop("t-eq-off", "target", max_iterations=2)
+        assert disabled.transcript_dir is None
+
+        # Recording on, but every write after the initial run.json fails.
+        _enable_transcripts(tmp_path, monkeypatch)
+        original_write_text = Path.write_text
+        calls = {"count": 0}
+
+        def flaky_write_text(self: Path, *args: object, **kwargs: object) -> int:
+            calls["count"] += 1
+            if calls["count"] >= 2:
+                raise OSError("simulated disk failure")
+            return original_write_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "write_text", flaky_write_text)
+
+        adapter_broken = StubAdapter("t-eq-broken", list(responses))
+        register("t-eq-broken", adapter_broken)
+        broken = await review_loop("t-eq-broken", "target", max_iterations=2)
+
+        # A recorder existed, so a path is reported, but the outcome is identical.
+        assert broken.transcript_dir is not None
+        assert broken.verdict == disabled.verdict
+        assert broken.review == disabled.review
+        assert broken.iterations == disabled.iterations
+
+    async def test_planning_loop_records_plan_rounds_and_status(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_transcripts(tmp_path, monkeypatch)
+        adapter = StubAdapter("t-plan", ["plan a", "plan b", "plan b"])
+        register("t-plan", adapter)
+
+        result = await planning_loop("t-plan", "task", max_iterations=3)
+
+        assert result.status == "complete"
+        assert result.iterations == 3
+        assert result.transcript_dir is not None
+        assert _round_files(result.transcript_dir) == [
+            "round-01-plan.md",
+            "round-02-plan.md",
+            "round-03-plan.md",
+        ]
+        data = _run_json(result.transcript_dir)
+        assert data["final"] == {"status": "complete", "iterations": 3}

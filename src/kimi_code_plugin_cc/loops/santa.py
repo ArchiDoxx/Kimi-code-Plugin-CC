@@ -15,6 +15,7 @@ Either way the loop is **fail-closed**: disagreement or non-convergence within
 from __future__ import annotations
 
 import inspect
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
@@ -25,6 +26,7 @@ from pydantic import BaseModel, Field
 from kimi_code_plugin_cc.agent_registry import get
 from kimi_code_plugin_cc.loops.prompts import review_prompt
 from kimi_code_plugin_cc.protocol.messages import AgentMessage, to_adapter_context
+from kimi_code_plugin_cc.transcript import TranscriptRecorder
 
 from .review import ReviewResult, ReviewVerdict, extract_verdict
 
@@ -49,6 +51,7 @@ class SantaResult(BaseModel):
     secondary_review: ReviewResult
     iterations: int = Field(ge=1)
     explanation: str
+    transcript_dir: str | None = None
 
 
 def _build_initial_review_prompt(target: str) -> str:
@@ -136,6 +139,7 @@ async def _secondary_review(
     adversary_agent: str,
     host_reviewer: HostReviewer | None,
     model: str | None = None,
+    recorder: TranscriptRecorder | None = None,
 ) -> ReviewResult:
     """Obtain the independent second review.
 
@@ -145,19 +149,45 @@ async def _secondary_review(
     The host callback may be sync or async; both are awaited correctly.
     """
     if host_reviewer is not None:
+        started = time.monotonic()
         result = host_reviewer(target, primary_review)
         if inspect.isawaitable(result):
             result = await result
+        if recorder is not None:
+            recorder.record_round(
+                index=iteration,
+                role="adversary",
+                agent="host",
+                model=None,
+                prompt=f"[host callback] target:\n{target}",
+                response=result.review,
+                verdict=result.verdict.value,
+                duration_s=time.monotonic() - started,
+            )
         return result
     adapter = get(adversary_agent)
     adversary_context: dict[str, Any] = {"loop": "santa", "role": "adversary"}
     if model is not None:
         adversary_context["model"] = model
+    prompt = _adversarial_prompt(target, primary_review)
+    started = time.monotonic()
     response = await adapter.run(
-        _adversarial_prompt(target, primary_review),
+        prompt,
         context=adversary_context,
     )
-    return _to_review_result(response, iteration)
+    result = _to_review_result(response, iteration)
+    if recorder is not None:
+        recorder.record_round(
+            index=iteration,
+            role="adversary",
+            agent=adversary_agent,
+            model=model,
+            prompt=prompt,
+            response=response.payload,
+            verdict=result.verdict.value,
+            duration_s=time.monotonic() - started,
+        )
+    return result
 
 
 def _build_explanation(
@@ -169,6 +199,15 @@ def _build_explanation(
     if primary.verdict != ReviewVerdict.APPROVE:
         return f"Primary reviewer did not approve ({primary.verdict.value})."
     return f"Secondary reviewer did not approve ({secondary.verdict.value})."
+
+
+def _with_transcript(
+    result: SantaResult, recorder: TranscriptRecorder | None
+) -> SantaResult:
+    """Attach the transcript directory to *result* when recording is on."""
+    if recorder is None:
+        return result
+    return result.model_copy(update={"transcript_dir": recorder.path})
 
 
 async def santa_loop(
@@ -208,6 +247,46 @@ async def santa_loop(
         raise ValueError("max_iterations must be at least 1")
 
     resolved_adversary = adversary_agent or primary_agent
+    recorder = TranscriptRecorder.start(
+        "santa",
+        meta={
+            "agents": {"primary": primary_agent, "adversary": resolved_adversary},
+            "model": model,
+            "max_iterations": max_iterations,
+        },
+    )
+    final: dict[str, object] = {}
+    try:
+        result, final = await _run_santa_loop(
+            primary_agent,
+            target,
+            max_iterations,
+            resolved_adversary=resolved_adversary,
+            host_reviewer=host_reviewer,
+            model=model,
+            recorder=recorder,
+        )
+        return result
+    except Exception as exc:
+        # Crashed runs keep their already-written rounds; record what is known.
+        final = {"error": repr(exc)}
+        raise
+    finally:
+        if recorder is not None:
+            recorder.finalize(final=final)
+
+
+async def _run_santa_loop(
+    primary_agent: str,
+    target: str,
+    max_iterations: int,
+    *,
+    resolved_adversary: str,
+    host_reviewer: HostReviewer | None,
+    model: str | None,
+    recorder: TranscriptRecorder | None,
+) -> tuple[SantaResult, dict[str, object]]:
+    """Loop body of :func:`santa_loop`; returns the result and final summary."""
     adapter = get(primary_agent)
     bridge_id = str(uuid.uuid4())
 
@@ -222,12 +301,24 @@ async def santa_loop(
     last_secondary: ReviewResult | None = None
 
     for iteration in range(1, max_iterations + 1):
+        started = time.monotonic()
         response = await adapter.run(
             message.payload,
             context=to_adapter_context(message, model=model),
         )
         primary_review = _to_review_result(response, iteration)
         last_primary = primary_review
+        if recorder is not None:
+            recorder.record_round(
+                index=iteration,
+                role="primary",
+                agent=primary_agent,
+                model=model,
+                prompt=message.payload,
+                response=response.payload,
+                verdict=primary_review.verdict.value,
+                duration_s=time.monotonic() - started,
+            )
 
         secondary_review = await _secondary_review(
             target,
@@ -236,6 +327,7 @@ async def santa_loop(
             resolved_adversary,
             host_reviewer,
             model=model,
+            recorder=recorder,
         )
         last_secondary = secondary_review
 
@@ -243,13 +335,15 @@ async def santa_loop(
             primary_review.verdict == ReviewVerdict.APPROVE
             and secondary_review.verdict == ReviewVerdict.APPROVE
         ):
-            return SantaResult(
+            result = SantaResult(
                 verdict=SantaVerdict.GREEN,
                 primary_review=primary_review,
                 secondary_review=secondary_review,
                 iterations=iteration,
                 explanation="Both reviewers approved.",
             )
+            final = {"verdict": SantaVerdict.GREEN.value, "iterations": iteration}
+            return _with_transcript(result, recorder), final
 
         if iteration == max_iterations:
             break
@@ -261,10 +355,12 @@ async def santa_loop(
         )
 
     explanation = _build_explanation(last_primary, last_secondary)
-    return SantaResult(
+    result = SantaResult(
         verdict=SantaVerdict.RED,
         primary_review=last_primary,
         secondary_review=last_secondary,
         iterations=max_iterations,
         explanation=explanation,
     )
+    final = {"verdict": SantaVerdict.RED.value, "iterations": max_iterations}
+    return _with_transcript(result, recorder), final

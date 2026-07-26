@@ -8,6 +8,17 @@ match `.claude-plugin/plugin.json` / `pyproject.toml`.
 
 ### Added
 
+- **Loop run transcripts** (`transcript.py`): every review/santa/planning run
+  persists a local transcript under
+  `~/.kimi-code-plugin-cc/transcripts/<run_id>/` (a `run.json` summary plus
+  one `round-NN-<role>.md` per exchange), so a review can be audited after
+  the fact. The recorder is fail-open (a disk error can never crash or alter
+  a loop, and a crashed run keeps its partial transcript) and bounded
+  (`KIMI_TRANSCRIPT_KEEP`, default 50 newest runs kept, older pruned at the
+  start of a run). Disable entirely with `KIMI_TRANSCRIPTS=0`; relocate with
+  `KIMI_TRANSCRIPT_DIR`. Loop results and the loop MCP tools expose the run
+  directory as `transcript_dir` (`null` when recording is off).
+
 - **Daily CLI canary** (`.github/workflows/canary.yml`): installs the *latest*
   `@moonshot-ai/kimi-code` on Linux and Windows every day, verifies the pinned
   flag surface (`tests/test_cli_contract.py`) and runs `doctor`. Upstream CLI

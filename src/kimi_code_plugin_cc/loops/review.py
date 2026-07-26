@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from enum import StrEnum
 
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field
 from kimi_code_plugin_cc.agent_registry import get
 from kimi_code_plugin_cc.loops.prompts import review_prompt
 from kimi_code_plugin_cc.protocol.messages import AgentMessage, to_adapter_context
+from kimi_code_plugin_cc.transcript import TranscriptRecorder
 
 DEFAULT_MAX_ITERATIONS = 3
 
@@ -28,6 +30,7 @@ class ReviewResult(BaseModel):
     verdict: ReviewVerdict
     iterations: int = Field(ge=1)
     final_message: AgentMessage
+    transcript_dir: str | None = None
 
 
 def _build_initial_review_prompt(target: str) -> str:
@@ -174,6 +177,15 @@ def _build_result(response: AgentMessage, iteration: int) -> ReviewResult:
     )
 
 
+def _with_transcript(
+    result: ReviewResult, recorder: TranscriptRecorder | None
+) -> ReviewResult:
+    """Attach the transcript directory to *result* when recording is on."""
+    if recorder is None:
+        return result
+    return result.model_copy(update={"transcript_dir": recorder.path})
+
+
 async def review_loop(
     agent_name: str,
     target: str,
@@ -192,6 +204,33 @@ async def review_loop(
     if max_iterations < 1:
         raise ValueError("max_iterations must be at least 1")
 
+    recorder = TranscriptRecorder.start(
+        "review",
+        meta={"agent": agent_name, "model": model, "max_iterations": max_iterations},
+    )
+    final: dict[str, object] = {}
+    try:
+        result, final = await _run_review_loop(
+            agent_name, target, max_iterations, model, recorder
+        )
+        return result
+    except Exception as exc:
+        # Crashed runs keep their already-written rounds; record what is known.
+        final = {"error": repr(exc)}
+        raise
+    finally:
+        if recorder is not None:
+            recorder.finalize(final=final)
+
+
+async def _run_review_loop(
+    agent_name: str,
+    target: str,
+    max_iterations: int,
+    model: str | None,
+    recorder: TranscriptRecorder | None,
+) -> tuple[ReviewResult, dict[str, object]]:
+    """Loop body of :func:`review_loop`; returns the result and final summary."""
     adapter = get(agent_name)
     bridge_id = str(uuid.uuid4())
 
@@ -205,18 +244,32 @@ async def review_loop(
     last_response: AgentMessage | None = None
 
     for iteration in range(1, max_iterations + 1):
+        started = time.monotonic()
         response = await adapter.run(
             message.payload,
             context=to_adapter_context(message, model=model),
         )
         last_response = response
         result = _build_result(response, iteration)
+        if recorder is not None:
+            recorder.record_round(
+                index=iteration,
+                role="review",
+                agent=agent_name,
+                model=model,
+                prompt=message.payload,
+                response=response.payload,
+                verdict=result.verdict.value,
+                duration_s=time.monotonic() - started,
+            )
 
         if result.verdict == ReviewVerdict.APPROVE:
-            return result
+            final = {"verdict": result.verdict.value, "iterations": iteration}
+            return _with_transcript(result, recorder), final
 
         if iteration == max_iterations:
-            return result
+            final = {"verdict": result.verdict.value, "iterations": iteration}
+            return _with_transcript(result, recorder), final
 
         message = _advance_message(
             response,
@@ -228,4 +281,6 @@ async def review_loop(
     if last_response is None:
         raise RuntimeError("review loop did not produce a response")
 
-    return _build_result(last_response, max_iterations)
+    result = _build_result(last_response, max_iterations)
+    final = {"verdict": result.verdict.value, "iterations": max_iterations}
+    return _with_transcript(result, recorder), final

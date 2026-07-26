@@ -29,6 +29,10 @@ Run `kimi-code-plugin doctor` to see the effective values on your machine.
   agent's provider. Do not paste secrets into a review.
 - **Trust in review output.** A review is advice from a third-party model.
   `santa-loop` exists precisely because a single "looks fine" is not evidence.
+- **Local transcript privacy.** Every loop run writes a transcript under
+  `~/.kimi-code-plugin-cc/transcripts/` containing the prompt and response
+  verbatim, i.e. the reviewed code. Disable recording with
+  `KIMI_TRANSCRIPTS=0`.
 
 ## Reporting a vulnerability
 

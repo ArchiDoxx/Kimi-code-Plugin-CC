@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Literal
 
@@ -8,6 +9,7 @@ from pydantic import BaseModel, Field
 from kimi_code_plugin_cc.agent_registry import get
 from kimi_code_plugin_cc.loops.prompts import plain_prompt
 from kimi_code_plugin_cc.protocol.messages import AgentMessage, to_adapter_context
+from kimi_code_plugin_cc.transcript import TranscriptRecorder
 
 DEFAULT_MAX_ITERATIONS = 3
 
@@ -19,6 +21,7 @@ class PlanResult(BaseModel):
     iterations: int = Field(ge=1)
     final_message: AgentMessage
     status: Literal["complete", "max_iterations"] = "complete"
+    transcript_dir: str | None = None
 
 
 def _build_initial_prompt(user_prompt: str) -> str:
@@ -67,6 +70,15 @@ def _advance_message(
     )
 
 
+def _with_transcript(
+    result: PlanResult, recorder: TranscriptRecorder | None
+) -> PlanResult:
+    """Attach the transcript directory to *result* when recording is on."""
+    if recorder is None:
+        return result
+    return result.model_copy(update={"transcript_dir": recorder.path})
+
+
 async def planning_loop(
     agent_name: str,
     prompt: str,
@@ -85,6 +97,33 @@ async def planning_loop(
     if max_iterations < 1:
         raise ValueError("max_iterations must be at least 1")
 
+    recorder = TranscriptRecorder.start(
+        "planning",
+        meta={"agent": agent_name, "model": model, "max_iterations": max_iterations},
+    )
+    final: dict[str, object] = {}
+    try:
+        result, final = await _run_planning_loop(
+            agent_name, prompt, max_iterations, model, recorder
+        )
+        return result
+    except Exception as exc:
+        # Crashed runs keep their already-written rounds; record what is known.
+        final = {"error": repr(exc)}
+        raise
+    finally:
+        if recorder is not None:
+            recorder.finalize(final=final)
+
+
+async def _run_planning_loop(
+    agent_name: str,
+    prompt: str,
+    max_iterations: int,
+    model: str | None,
+    recorder: TranscriptRecorder | None,
+) -> tuple[PlanResult, dict[str, object]]:
+    """Loop body of :func:`planning_loop`; returns the result and final summary."""
     adapter = get(agent_name)
     bridge_id = str(uuid.uuid4())
 
@@ -99,6 +138,7 @@ async def planning_loop(
     last_response: AgentMessage | None = None
 
     for iteration in range(1, max_iterations + 1):
+        started = time.monotonic()
         response = await adapter.run(
             message.payload,
             context=to_adapter_context(message, model=model),
@@ -106,24 +146,39 @@ async def planning_loop(
         last_response = response
         previous_plan = current_plan
         current_plan = response.payload
+        if recorder is not None:
+            recorder.record_round(
+                index=iteration,
+                role="plan",
+                agent=agent_name,
+                model=model,
+                prompt=message.payload,
+                response=response.payload,
+                verdict=None,
+                duration_s=time.monotonic() - started,
+            )
 
         # Converged: a refinement round returned the same plan, so further
         # iterations add nothing. Stop early and report completion.
         if iteration > 1 and current_plan.strip() == previous_plan.strip():
-            return PlanResult(
+            result = PlanResult(
                 plan=current_plan,
                 iterations=iteration,
                 final_message=response,
                 status="complete",
             )
+            final = {"status": "complete", "iterations": iteration}
+            return _with_transcript(result, recorder), final
 
         if iteration == max_iterations:
-            return PlanResult(
+            result = PlanResult(
                 plan=current_plan,
                 iterations=iteration,
                 final_message=response,
                 status="max_iterations",
             )
+            final = {"status": "max_iterations", "iterations": iteration}
+            return _with_transcript(result, recorder), final
 
         message = _advance_message(
             response,
@@ -135,9 +190,11 @@ async def planning_loop(
     if last_response is None:
         raise RuntimeError("planning loop did not produce a response")
 
-    return PlanResult(
+    result = PlanResult(
         plan=current_plan,
         iterations=max_iterations,
         final_message=last_response,
         status="max_iterations",
     )
+    final = {"status": "max_iterations", "iterations": max_iterations}
+    return _with_transcript(result, recorder), final

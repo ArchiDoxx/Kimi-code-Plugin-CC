@@ -18,3 +18,13 @@ def _isolate_registry() -> None:
     yield
     _REGISTRY.clear()
     _REGISTRY.update(snapshot)
+
+
+@pytest.fixture(autouse=True)
+def _disable_transcript_recording(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the suite from writing transcripts into the real home directory.
+
+    Transcript tests re-enable recording with their own monkeypatch
+    (``delenv``/``setenv`` applied later wins over this fixture).
+    """
+    monkeypatch.setenv("KIMI_TRANSCRIPTS", "0")

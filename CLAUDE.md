@@ -27,6 +27,10 @@ on Windows.**
   `loops/prompts.py` holds the shared preamble and verdict contract: **every**
   round builds through it, so no round can drop the contract (that bug made
   iterations 2+ fall back to fuzzy parsing until v1.4.0).
+- `src/kimi_code_plugin_cc/transcript.py` - best-effort, fail-open transcript
+  persistence for the loops (one `<base>/<run_id>/` directory per run:
+  `run.json` plus one `round-NN-<role>.md` per exchange). Configured via
+  `KIMI_TRANSCRIPTS` / `KIMI_TRANSCRIPT_DIR` / `KIMI_TRANSCRIPT_KEEP`.
 - `src/kimi_code_plugin_cc/errors.py` — the single error contract for the MCP
   surface. Loop tools return their fail-closed verdict inside the error payload.
 - `src/kimi_code_plugin_cc/doctor.py` — preflight checks behind
