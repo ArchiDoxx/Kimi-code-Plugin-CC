@@ -91,17 +91,20 @@ match `.claude-plugin/plugin.json` / `pyproject.toml`.
 
 ### Changed
 
-- Child-process credentials are now scoped **per agent** instead of shared. The
-  runner's allowlist previously forwarded every vendor's auth variables to every
-  agent, so adding codex would have handed a codex review `MOONSHOT_API_KEY` and
-  a kimi review `OPENAI_API_KEY`. Each adapter now declares its own
-  (`bridge.runner.AuthEnv`): kimi gets `KIMI_*` / `ANTHROPIC_*` / `MOONSHOT_*` /
-  `API_KEY`, codex gets `OPENAI_*` / `CODEX_HOME`, and the shared base carries
-  only `PATH`-class variables. This matters because command execution is
-  permitted even under a read-only sandbox: a prompt-injected agent could
-  otherwise read another vendor's key out of its own environment and quote it
-  into its answer, which the loops then persist to a transcript. A caller that
-  declares nothing forwards no credentials at all.
+- Child-process credentials are now scoped **per agent** instead of shared.
+  The runner's allowlist was global, so a codex review would have received
+  `MOONSHOT_API_KEY` and `ANTHROPIC_API_KEY` — credentials it has no use for.
+  Each adapter now declares its own set (`bridge.runner.AuthEnv`) and the
+  shared base carries only `PATH`-class variables; a caller that declares
+  nothing forwards no credentials at all. This matters because command
+  execution is permitted even under a read-only sandbox: a prompt-injected
+  agent could otherwise read another vendor's key out of its own environment
+  and quote it into its answer, which the loops then persist to a transcript.
+  **kimi's own set is unchanged** (`KIMI_*` / `ANTHROPIC_*` / `MOONSHOT_*` /
+  `API_KEY` / `OPENAI_API_KEY`) — it is multi-provider and the CLI bundles an
+  OpenAI client that reads `OPENAI_API_KEY`, so narrowing it under cover of a
+  hardening change would have silently broken those runs. codex receives
+  `OPENAI_*` and `CODEX_HOME` only.
 - `AdapterNotImplementedError` moved from `agent_registry/codex.py` to
   `agent_registry/base.py`: it belongs to the adapter contract, and codex is no
   longer a skeleton.

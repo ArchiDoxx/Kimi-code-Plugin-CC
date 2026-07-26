@@ -158,18 +158,23 @@ class TestAuthEnvIsolation:
         assert "ANTHROPIC_API_KEY" not in env
         assert "KIMI_MAX_POLICY" not in env
 
-    def test_kimi_does_not_receive_openai_secrets(self) -> None:
+    def test_kimi_does_not_receive_codex_specific_variables(self) -> None:
         env = self._child_env(
             KIMI_AUTH_ENV,
             {
                 "PATH": "/usr/bin",
                 "MOONSHOT_API_KEY": "sk-moonshot",
                 "OPENAI_API_KEY": "sk-openai",
+                "OPENAI_BASE_URL": "https://example.invalid/v1",
                 "CODEX_HOME": "/home/u/.codex",
             },
         )
         assert env["MOONSHOT_API_KEY"] == "sk-moonshot"
-        assert "OPENAI_API_KEY" not in env
+        # kimi keeps the OpenAI *key* it has had since v1.0.0 (it is
+        # multi-provider and can route to an OpenAI-compatible endpoint), but
+        # not codex's wider namespace.
+        assert env["OPENAI_API_KEY"] == "sk-openai"
+        assert "OPENAI_BASE_URL" not in env
         assert "CODEX_HOME" not in env
 
     def test_base_variables_are_forwarded_to_everyone(self) -> None:
@@ -202,3 +207,20 @@ class TestAuthEnvIsolation:
         )
         assert "AWS_SECRET_ACCESS_KEY" not in env
         assert "GITHUB_TOKEN" not in env
+
+    def test_kimi_keeps_the_credentials_it_had_before_scoping(self) -> None:
+        """Per-agent scoping must not silently narrow an existing agent.
+
+        kimi has received these since v1.0.0, and the installed CLI bundles an
+        OpenAI client that reads OPENAI_API_KEY — a multi-provider config routed
+        through `-m` can authenticate from it. Dropping it under cover of a
+        hardening change would break those runs mid-review.
+        """
+        assert KIMI_AUTH_ENV.allows("KIMI_ANYTHING")
+        assert KIMI_AUTH_ENV.allows("ANTHROPIC_API_KEY")
+        assert KIMI_AUTH_ENV.allows("MOONSHOT_API_KEY")
+        assert KIMI_AUTH_ENV.allows("API_KEY")
+        assert KIMI_AUTH_ENV.allows("OPENAI_API_KEY")
+        # The exact name only — not codex's whole namespace.
+        assert not KIMI_AUTH_ENV.allows("OPENAI_BASE_URL")
+        assert not KIMI_AUTH_ENV.allows("CODEX_HOME")

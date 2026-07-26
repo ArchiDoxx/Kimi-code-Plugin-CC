@@ -84,7 +84,9 @@ ALLOWED_SANDBOX_MODES = frozenset({"read-only", "workspace-write"})
 #
 # Unlike kimi, 'accept-edits' IS enactable here (`--sandbox workspace-write` is
 # a verified flag), so it is honoured — but only up to the KIMI_MAX_POLICY
-# ceiling (read-only by default) and only inside the isolated worktree.
+# ceiling (read-only by default) and only when the run has a working directory
+# to contain the writes (the adapter refuses a writable sandbox with cwd=None,
+# which would make the host's current directory the agent's workspace).
 POLICY_TO_SANDBOX = {
     "read-only": "read-only",
     "accept-edits": "workspace-write",

@@ -48,15 +48,23 @@ INSTALL_HINT = (
     "Install it with 'npm i -g @moonshot-ai/kimi-code', then run 'kimi --version'."
 )
 
-# Host credentials this agent may receive. Kimi Code is Moonshot's CLI;
-# API-key deployments use MOONSHOT_API_KEY, and ANTHROPIC_* covers
-# Anthropic-compatible endpoints. Non-secret KIMI_* config (KIMI_MAX_POLICY,
-# KIMI_ISOLATE_SKILLS) rides along on the same prefix — harmless, and splitting
-# it would complicate auth passthrough for no gain. No OpenAI variables: kimi
-# has no use for them, and forwarding them would hand one vendor's CLI another
-# vendor's key.
+# Host credentials this agent may receive. Deliberately identical to the set
+# kimi has received since v1.0.0: scoping credentials per agent is a hardening
+# change, and quietly narrowing an existing agent's auth under cover of it
+# would be a silent breaking change.
+#
+# Kimi Code is Moonshot's CLI (API-key deployments use MOONSHOT_API_KEY) and
+# ANTHROPIC_* covers Anthropic-compatible endpoints. OPENAI_API_KEY stays
+# because kimi is multi-provider: the installed CLI bundles an OpenAI client
+# that reads that variable, so a config.toml provider routed through `-m` can
+# authenticate from it, and dropping it would break those runs mid-review.
+# Note it is the exact name, not the OPENAI_ prefix — kimi needs the key, not
+# codex's whole namespace. Non-secret KIMI_* config (KIMI_MAX_POLICY,
+# KIMI_ISOLATE_SKILLS) rides along on its prefix; harmless, and splitting it
+# would complicate auth passthrough for no gain.
 AUTH_ENV = AuthEnv(
-    prefixes=("KIMI_", "ANTHROPIC_", "MOONSHOT_"), exact=frozenset({"API_KEY"})
+    prefixes=("KIMI_", "ANTHROPIC_", "MOONSHOT_"),
+    exact=frozenset({"API_KEY", "OPENAI_API_KEY"}),
 )
 
 # Returned when the CLI produces no usable text. Worded so a review loop reads

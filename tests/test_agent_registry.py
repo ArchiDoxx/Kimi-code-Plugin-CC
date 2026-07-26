@@ -18,6 +18,7 @@ from kimi_code_plugin_cc.agent_registry import (
     register,
 )
 from kimi_code_plugin_cc.agent_registry.base import AgentAdapter
+from kimi_code_plugin_cc.agent_registry.codex import AUTH_ENV as CODEX_AUTH_ENV
 from kimi_code_plugin_cc.agent_registry.codex import CodexAdapter
 from kimi_code_plugin_cc.agent_registry.codex_contract import (
     BANNED_SANDBOX_MODE,
@@ -27,6 +28,7 @@ from kimi_code_plugin_cc.agent_registry.codex_contract import (
     OUTPUT_FLAG,
 )
 from kimi_code_plugin_cc.agent_registry.common import DEFAULT_MAX_PROMPT_CHARS
+from kimi_code_plugin_cc.agent_registry.kimi import AUTH_ENV as KIMI_AUTH_ENV
 from kimi_code_plugin_cc.agent_registry.kimi import is_resume_hint_event
 from kimi_code_plugin_cc.bridge.runner import RunResult
 from kimi_code_plugin_cc.protocol.messages import DEFAULT_MAX_DEPTH, AgentMessage
@@ -184,6 +186,20 @@ class TestKimiCodeAdapter:
         cwd = mock_run.call_args.kwargs["cwd"]
         assert cwd is not None
         assert "kimi_worktree_" in str(cwd)
+
+    async def test_run_declares_its_own_credentials_to_the_runner(self) -> None:
+        """Same wiring guarantee as for codex: the runner forwards nothing
+        unless the adapter says what its vendor needs."""
+        adapter = KimiCodeAdapter()
+        with (
+            mock.patch(
+                f"{KIMI_MODULE}.run_agent_process", new_callable=mock.AsyncMock
+            ) as mock_run,
+            mock.patch(f"{KIMI_MODULE}.shutil.which", return_value="/usr/bin/kimi"),
+        ):
+            mock_run.return_value = _run_result(stdout=json.dumps({"content": "ok"}))
+            await adapter.run("prompt", {})
+        assert mock_run.call_args.kwargs["auth_env"] is KIMI_AUTH_ENV
 
     async def test_run_passes_completion_check_to_runner(self) -> None:
         """Kimi prints its answer but may never exit (global MCP servers keep
@@ -623,6 +639,21 @@ class TestCodexAdapter:
         env = mock_run.call_args.kwargs["env"]
         assert env["KIMI_BRIDGE_DEPTH"] == "1"
         assert mock_run.call_args.kwargs["max_depth"] == DEFAULT_MAX_DEPTH
+
+    async def test_run_declares_its_own_credentials_to_the_runner(self) -> None:
+        """The wiring, not just the filter, has to be pinned.
+
+        `_build_child_env` is tested directly in test_bridge.py, but without
+        this assertion deleting `auth_env=AUTH_ENV` from the call would keep
+        every test green while the runner fell back to forwarding nothing —
+        breaking auth only in production.
+        """
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {})
+        assert mock_run.call_args.kwargs["auth_env"] is CODEX_AUTH_ENV
 
     async def test_run_waits_for_natural_exit(self) -> None:
         """``codex exec`` is batch and exits on its own.
