@@ -11,6 +11,50 @@ _No key facts recorded yet._
 
 ## Recent Activity
 
+### 🔍 Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && g...
+Used Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && g... → src/kimi_code_plugin_cc/agent_registry/base.py
+**Files:** [, ], [
+
+### 🔍 Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && u...
+Used Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && u... → <Function test_caps_higher_requested_policy>
+**Files:** [, ], [
+
+### 🔍 Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && u...
+Used Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && u... → <Function test_planning_loop_rejects_zero_iterations>
+**Files:** [, ], [
+
+### 🔍 Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && u...
+Used Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && u... → <Function test_is_depth_allowed_with_message[0-0-True]>
+**Files:** [, ], [
+
+### 🔍 Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && u...
+Used Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && u... → All checks passed!
+**Files:** [, ], [
+
+### 🔍 Write: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/t...
+Used Write: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/t... → Wrote 4378 bytes to C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/test_windows_...
+**Files:** [, ], [
+
+### 🔍 Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim...
+Used Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim... → 1 """Pydantic message models for the Kimi Code plugin bridge protocol.
+**Files:** [, ], [
+
+### 🔍 Edit: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim...
+Used Edit: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim... → Replaced 1 occurrence in C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kimi_code_p...
+**Files:** [, ], [
+
+### 🔍 Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim...
+Used Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/src/kim... → 1 """Async subprocess runner for headless CLI agents."""
+**Files:** [, ], [
+
+### 🔍 Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/t...
+Used Read: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/t... → 1 """Tests for the bridge session and parser modules."""
+**Files:** [, ], [
+
+### 🔍 Edit: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/t...
+Used Edit: C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/t... → Replaced 1 occurrence in C:/Users/luceb/Desktop/Kimi-code-Plugin-CC/tests/test_wind...
+**Files:** [, ], [
+
 ### 🐛 Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && u...
 Used Bash: cd /c/Users/luceb/Desktop/Kimi-code-Plugin-CC && u... → ============================= test session starts =============================
 **Files:** [, ], [
@@ -45,50 +89,6 @@ Used Bash: uv run pytest tests/test_agent_registry.py -v → ===================
 
 ### 🐛 Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re...
 Used Bash: uv run ruff check src/kimi_code_plugin_cc/agent_re... → F401 [*] `kimi_code_plugin_cc.security.policy.ApprovalPolicy` imported but unused
-**Files:** [, ], [
-
-### 🐛 Bash: find src tests -type d -name __pycache__ -exec rm ...
-Used Bash: find src tests -type d -name __pycache__ -exec rm ... → All checks passed!
-**Files:** [, ], [
-
-### 🔍 Edit: tests/test_agent_registry.py
-Used Edit: tests/test_agent_registry.py → old_string not found in tests/test_agent_registry.py, the file contents may be out of date. Please u...
-**Files:** [, ], [
-
-### 🔍 Read: tests/test_security.py
-Used Read: tests/test_security.py → 1 """Tests for the security policy layer and worktree isolation."""
-**Files:** [, ], [
-
-### 🔍 Read: src/kimi_code_plugin_cc/protocol/messages.py
-Used Read: src/kimi_code_plugin_cc/protocol/messages.py → 1 """Pydantic message models for the Kimi Code plugin bridge protocol.
-**Files:** [, ], [
-
-### 🐛 Bash: uv run pytest --cache-clear -v
-Used Bash: uv run pytest --cache-clear -v → ============================= test session starts =============================
-**Files:** [, ], [
-
-### 🔍 Bash: ls -la tests/
-Used Bash: ls -la tests/ → drwxr-xr-x 1 luceb 197609 0 Jun 21 01:32 .
-**Files:** [, ], [
-
-### 🐛 Bash: uv run pytest -v
-Used Bash: uv run pytest -v → ============================= test session starts =============================
-**Files:** [, ], [
-
-### 🔍 Read: tests/test_windows_runner.py
-Used Read: tests/test_windows_runner.py → 1 """Tests for the Windows-aware subprocess runner."""
-**Files:** [, ], [
-
-### 🔍 Read: src/kimi_code_plugin_cc/protocol/__init__.py
-Used Read: src/kimi_code_plugin_cc/protocol/__init__.py → 1 """Protocol message types for agent communication."""
-**Files:** [, ], [
-
-### 🔍 Edit: src/kimi_code_plugin_cc/agent_registry/codex.py
-Used Edit: src/kimi_code_plugin_cc/agent_registry/codex.py → Replaced 1 occurrence in src/kimi_code_plugin_cc/agent_registry/codex.py
-**Files:** [, ], [
-
-### 🐛 Bash: uv run ruff check . && uv run pytest -v
-Used Bash: uv run ruff check . && uv run pytest -v → E501 Line too long (89 > 88)
 **Files:** [, ], [
 
 ---
