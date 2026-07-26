@@ -26,6 +26,11 @@ my review fail" questions before you hit them.
   `second-opinion` (`/kimi-opinion`), `bridge` (`/kimi-run`).
 - **Loop skills**: `review-loop` (iterative), `santa-loop` (adversarial
   dual-review, fail-closed), `planning-loop` (iterative plan refinement).
+- **Run transcripts**: every loop run leaves a local transcript on disk under
+  `<base>/<run_id>/` (a `run.json` summary plus one `round-NN-<role>.md` per
+  exchange), so a review can be audited after the fact. Transcripts contain
+  the reviewed code verbatim; recording is fail-open and can be disabled with
+  `KIMI_TRANSCRIPTS=0`.
 - **Preflight diagnostics**: `kimi-code-plugin doctor` verifies the agent CLI is
   installed, reports its version, checks the flag surface the adapter depends
   on, and prints the effective policy ceiling, depth guard, prompt limit and
@@ -231,6 +236,9 @@ does not match the alias charset.
 | `KIMI_WORKTREE_BASE` | system temp | Base directory for isolated agent worktrees. |
 | `KIMI_MAX_PROMPT_CHARS` | `30000` | Prompt ceiling. The prompt is passed as a command-line argument, which the OS caps (32767 characters on Windows); oversized prompts are rejected with an actionable message instead of an opaque spawn failure. |
 | `KIMI_ISOLATE_SKILLS` | `1` | Run the agent with skills discovery disabled so reviews are reproducible across machines. Set to `0` to let it load the host's skills. |
+| `KIMI_TRANSCRIPTS` | `1` (on) | `0`/`false` disables transcript recording entirely. |
+| `KIMI_TRANSCRIPT_DIR` | `~/.kimi-code-plugin-cc/transcripts` | Base directory override for loop transcripts. |
+| `KIMI_TRANSCRIPT_KEEP` | `50` | Newest N run directories kept; older ones are pruned at the start of a run. |
 
 `kimi-code-plugin doctor` prints the effective values of all of these.
 
