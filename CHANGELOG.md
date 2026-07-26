@@ -52,16 +52,6 @@ match `.claude-plugin/plugin.json` / `pyproject.toml`.
   them — a duplicated security guard is a defect waiting to drift.
 - `errors.AgentNotInstalledError` carries the *agent's own* install channel, so
   a missing codex no longer tells you to install kimi.
-
-### Changed
-
-- The child-process environment allowlist also forwards `OPENAI_*` and
-  `CODEX_HOME`, which codex needs in order to authenticate. `OPENAI_API_KEY` is
-  covered by the new prefix and was dropped from the exact list.
-- `AdapterNotImplementedError` moved from `agent_registry/codex.py` to
-  `agent_registry/base.py`: it belongs to the adapter contract, and codex is no
-  longer a skeleton.
-
 - **Loop run transcripts** (`transcript.py`): every review/santa/planning run
   persists a local transcript under
   `~/.kimi-code-plugin-cc/transcripts/<run_id>/` (a `run.json` summary plus
@@ -98,6 +88,23 @@ match `.claude-plugin/plugin.json` / `pyproject.toml`.
   on a user's machine. A hard `kimi --version` step prevents the contract test
   from skipping itself silently. Contract tier only — no credentials; a live
   round-trip tier can be added later via an API-key secret.
+
+### Changed
+
+- Child-process credentials are now scoped **per agent** instead of shared. The
+  runner's allowlist previously forwarded every vendor's auth variables to every
+  agent, so adding codex would have handed a codex review `MOONSHOT_API_KEY` and
+  a kimi review `OPENAI_API_KEY`. Each adapter now declares its own
+  (`bridge.runner.AuthEnv`): kimi gets `KIMI_*` / `ANTHROPIC_*` / `MOONSHOT_*` /
+  `API_KEY`, codex gets `OPENAI_*` / `CODEX_HOME`, and the shared base carries
+  only `PATH`-class variables. This matters because command execution is
+  permitted even under a read-only sandbox: a prompt-injected agent could
+  otherwise read another vendor's key out of its own environment and quote it
+  into its answer, which the loops then persist to a transcript. A caller that
+  declares nothing forwards no credentials at all.
+- `AdapterNotImplementedError` moved from `agent_registry/codex.py` to
+  `agent_registry/base.py`: it belongs to the adapter contract, and codex is no
+  longer a skeleton.
 
 ## [1.4.0] — 2026-07-25
 

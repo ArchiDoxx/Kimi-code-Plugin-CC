@@ -751,6 +751,52 @@ class TestCodexPolicyMapping:
             await adapter.run("prompt", {"approval_policy": smuggled})
         mock_run.assert_not_called()
 
+    async def test_writable_sandbox_requires_a_working_directory(self) -> None:
+        """A writable sandbox with cwd=None would make the HOST dir writable.
+
+        `--sandbox workspace-write` scopes writes to the process's working
+        directory. With worktree isolation off and no explicit worktree that is
+        the host's current directory, so a prompt-injected agent could edit the
+        code under review. The policy cap alone does not prevent it.
+        """
+        adapter = CodexAdapter(use_isolated_worktree=False)
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            mock.patch.dict(os.environ, {"KIMI_MAX_POLICY": "accept-edits"}),
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(PermissionError, match="workspace-write"),
+        ):
+            await adapter.run("prompt", {"approval_policy": "accept-edits"})
+        mock_run.assert_not_called()
+
+    async def test_writable_sandbox_is_allowed_inside_an_explicit_worktree(
+        self, tmp_path
+    ) -> None:
+        # A caller-supplied directory contains the writes, so it is permitted.
+        adapter = CodexAdapter(worktree=tmp_path)
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            mock.patch.dict(os.environ, {"KIMI_MAX_POLICY": "accept-edits"}),
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+        ):
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {"approval_policy": "accept-edits"})
+        argv = mock_run.call_args.args[0]
+        assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+
+    async def test_read_only_still_runs_without_a_working_directory(self) -> None:
+        # The containment rule must only bite for writable sandboxes.
+        adapter = CodexAdapter(use_isolated_worktree=False)
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _codex_runner()
+            await adapter.run("prompt", {"approval_policy": "read-only"})
+        assert mock_run.call_args.kwargs["cwd"] is None
+
     async def test_sandbox_allowlist_is_enforced_structurally(self) -> None:
         """Defense in depth: the argv builder refuses an off-list sandbox mode.
 

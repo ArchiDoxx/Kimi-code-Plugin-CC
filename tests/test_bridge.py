@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import AsyncIterator
+from unittest import mock
 
 import pytest
 
+from kimi_code_plugin_cc.agent_registry.codex import AUTH_ENV as CODEX_AUTH_ENV
+from kimi_code_plugin_cc.agent_registry.kimi import AUTH_ENV as KIMI_AUTH_ENV
 from kimi_code_plugin_cc.bridge.parser import (
     parse_stream_json,
     parse_stream_json_async,
 )
 from kimi_code_plugin_cc.bridge.runner import (
     DEPTH_ENV_VAR,
+    AuthEnv,
     RunResult,
+    _build_child_env,
     run_agent_process,
 )
 
@@ -117,3 +123,82 @@ class TestRunner:
                 timeout=5.0,
                 max_depth=5,
             )
+
+
+class TestAuthEnvIsolation:
+    """Each agent may receive only its own vendor's credentials.
+
+    A single global auth allowlist handed every agent every vendor's key. Since
+    command execution is permitted even under a read-only sandbox, a
+    prompt-injected agent could read another vendor's key out of its own
+    environment and quote it into its answer, which the loops then persist to a
+    transcript.
+    """
+
+    @staticmethod
+    def _child_env(auth_env: AuthEnv | None, host: dict[str, str]) -> dict[str, str]:
+        with mock.patch.dict(os.environ, host, clear=True):
+            return _build_child_env({}, auth_env)
+
+    def test_codex_does_not_receive_moonshot_or_anthropic_secrets(self) -> None:
+        env = self._child_env(
+            CODEX_AUTH_ENV,
+            {
+                "PATH": "/usr/bin",
+                "OPENAI_API_KEY": "sk-openai",
+                "CODEX_HOME": "/home/u/.codex",
+                "MOONSHOT_API_KEY": "sk-moonshot",
+                "ANTHROPIC_API_KEY": "sk-anthropic",
+                "KIMI_MAX_POLICY": "read-only",
+            },
+        )
+        assert env["OPENAI_API_KEY"] == "sk-openai"
+        assert env["CODEX_HOME"] == "/home/u/.codex"
+        assert "MOONSHOT_API_KEY" not in env
+        assert "ANTHROPIC_API_KEY" not in env
+        assert "KIMI_MAX_POLICY" not in env
+
+    def test_kimi_does_not_receive_openai_secrets(self) -> None:
+        env = self._child_env(
+            KIMI_AUTH_ENV,
+            {
+                "PATH": "/usr/bin",
+                "MOONSHOT_API_KEY": "sk-moonshot",
+                "OPENAI_API_KEY": "sk-openai",
+                "CODEX_HOME": "/home/u/.codex",
+            },
+        )
+        assert env["MOONSHOT_API_KEY"] == "sk-moonshot"
+        assert "OPENAI_API_KEY" not in env
+        assert "CODEX_HOME" not in env
+
+    def test_base_variables_are_forwarded_to_everyone(self) -> None:
+        host = {"PATH": "/usr/bin", "TMP": "/tmp", "USERPROFILE": "C:/Users/u"}
+        for auth_env in (KIMI_AUTH_ENV, CODEX_AUTH_ENV, None):
+            env = self._child_env(auth_env, host)
+            assert env["PATH"] == "/usr/bin"
+            assert env["TMP"] == "/tmp"
+            assert env["USERPROFILE"] == "C:/Users/u"
+
+    def test_no_declaration_forwards_no_credentials(self) -> None:
+        # Fail-safe default: a caller that has not said what its agent needs
+        # gets nothing sensitive rather than everything.
+        env = self._child_env(
+            None,
+            {
+                "PATH": "/usr/bin",
+                "OPENAI_API_KEY": "sk-openai",
+                "API_KEY": "sk-generic",
+            },
+        )
+        assert "OPENAI_API_KEY" not in env
+        assert "API_KEY" not in env
+        assert env["PATH"] == "/usr/bin"
+
+    def test_unrelated_host_secrets_are_never_forwarded(self) -> None:
+        env = self._child_env(
+            CODEX_AUTH_ENV,
+            {"PATH": "/usr/bin", "AWS_SECRET_ACCESS_KEY": "aws", "GITHUB_TOKEN": "gh"},
+        )
+        assert "AWS_SECRET_ACCESS_KEY" not in env
+        assert "GITHUB_TOKEN" not in env

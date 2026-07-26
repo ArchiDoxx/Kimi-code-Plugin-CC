@@ -53,6 +53,7 @@ from kimi_code_plugin_cc.agent_registry.common import (
 )
 from kimi_code_plugin_cc.bridge.runner import (
     DEPTH_ENV_VAR,
+    AuthEnv,
     RunResult,
     assert_spawn_allowed,
     run_agent_process,
@@ -73,6 +74,14 @@ from .base import AgentAdapter
 DEFAULT_TIMEOUT_SECONDS = 600
 _OUTBOX_PREFIX = "kimi_codex_out_"
 
+# Host credentials this agent may receive. OPENAI_* carries the API key and any
+# base-URL override; CODEX_HOME points at auth.json and the session store, and
+# is named exactly rather than as a CODEX_* prefix so future variables are not
+# forwarded blindly. No Moonshot/Anthropic variables: codex has no use for
+# them, and a review is exactly the situation where a prompt-injected agent
+# would be asked to read its own environment back to us.
+AUTH_ENV = AuthEnv(prefixes=("OPENAI_",), exact=frozenset({"CODEX_HOME"}))
+
 # How much stdout to quote when a run fails without writing to stderr.
 _MAX_CONTEXT_CHARS = 2000
 
@@ -86,6 +95,39 @@ def _failure_context(result: RunResult) -> str:
     if stdout:
         return f"(no stderr) last stdout: {stdout[-_MAX_CONTEXT_CHARS:]}"
     return "(no output on either stream)"
+
+
+def session_isolation_enabled() -> bool:
+    """Return True unless ``KIMI_CODEX_ISOLATE_SESSION`` is explicitly falsey.
+
+    Module-level so ``doctor`` can report the configured setting without
+    constructing an adapter; a per-instance override still wins over it.
+    """
+    return env_flag_enabled(ENV_ISOLATE_SESSION)
+
+
+def _assert_write_sandbox_is_contained(sandbox: str, workdir: Path | None) -> None:
+    """Refuse a writable sandbox that has no working directory to contain it.
+
+    ``--sandbox workspace-write`` lets the agent write its *workspace*, and the
+    workspace is the process's working directory. With ``cwd=None`` that is the
+    host process's current directory — typically the repository under review —
+    so a prompt-injected agent could edit the very code being reviewed.
+
+    The policy cap alone does not prevent this: ``KIMI_MAX_POLICY=accept-edits``
+    plus ``CodexAdapter(use_isolated_worktree=False)`` is a legitimate-looking
+    combination that reaches it. Containment is therefore enforced here rather
+    than merely asserted in a comment. Neither ingredient is reachable from
+    per-call context, so this guards an embedding mistake, not a hostile prompt.
+    """
+    if sandbox == "workspace-write" and workdir is None:
+        raise PermissionError(
+            "Refusing to run codex with --sandbox workspace-write and no "
+            "working directory: the agent's writable workspace would be the "
+            "host process's current directory. Enable worktree isolation "
+            "(the default) or pass an explicit 'worktree' to contain the "
+            "writes, or keep the policy at 'read-only'."
+        )
 
 
 def read_final_message(path: Path, result: RunResult) -> str:
@@ -237,6 +279,7 @@ class CodexAdapter(AgentAdapter):
         try:
             outbox = Path(tempfile.mkdtemp(prefix=_OUTBOX_PREFIX))
             workdir = self._resolve_workdir()
+            _assert_write_sandbox_is_contained(sandbox, workdir)
             last_message = outbox / LAST_MESSAGE_FILENAME
             command = await self._build_command(
                 prefix, prompt, sandbox, model, last_message
@@ -250,6 +293,7 @@ class CodexAdapter(AgentAdapter):
                 timeout=self._timeout,
                 max_depth=DEFAULT_MAX_DEPTH,
                 cwd=workdir,
+                auth_env=AUTH_ENV,
             )
             return read_final_message(last_message, result)
         finally:
@@ -338,7 +382,7 @@ class CodexAdapter(AgentAdapter):
         """Return whether ``--ephemeral``/``--ignore-user-config`` are wanted."""
         if self._isolate_session is not None:
             return self._isolate_session
-        return env_flag_enabled(ENV_ISOLATE_SESSION)
+        return session_isolation_enabled()
 
     def _resolve_workdir(self) -> Path | None:
         """Return the working directory for the agent subprocess.

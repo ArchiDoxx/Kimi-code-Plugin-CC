@@ -20,12 +20,15 @@ from pathlib import Path
 from typing import Literal
 
 from kimi_code_plugin_cc.agent_registry.capabilities import cli_version, help_text
+from kimi_code_plugin_cc.agent_registry.codex import (
+    session_isolation_enabled as _codex_session_isolation_enabled,
+)
 from kimi_code_plugin_cc.agent_registry.codex_contract import (
     CODEX_EXECUTABLE,
     EXEC_SUBCOMMAND,
     INSTALL_HINT,
-    ISOLATION_FLAGS,
     REQUIRED_EXEC_FLAGS,
+    SESSION_ISOLATION_FLAGS,
 )
 from kimi_code_plugin_cc.agent_registry.common import (
     DEFAULT_MAX_PROMPT_CHARS,
@@ -132,6 +135,40 @@ def _cli_checks(prefix: list[str]) -> list[Check]:
     return checks
 
 
+def _codex_flag_check(help_output: str) -> Check:
+    """Report whether the installed codex still offers the required flags."""
+    missing = [flag for flag in REQUIRED_EXEC_FLAGS if flag not in help_output]
+    if missing:
+        return Check(
+            "codex flag surface",
+            "fail",
+            f"missing required flags: {', '.join(missing)}",
+        )
+    return Check(
+        "codex flag surface",
+        "ok",
+        f"all required flags present: {', '.join(REQUIRED_EXEC_FLAGS)}",
+    )
+
+
+def _codex_isolation_check(help_output: str) -> Check:
+    """Report session-isolation support, which is a nicety rather than a need."""
+    missing = [f for f in SESSION_ISOLATION_FLAGS if f not in help_output]
+    if missing:
+        return Check(
+            "codex isolation",
+            "warn",
+            f"this CLI has no {', '.join(missing)}, so runs inherit the host's "
+            "codex config and leave session files behind",
+        )
+    active = (
+        "active" if _codex_session_isolation_enabled() else "available but disabled"
+    )
+    return Check(
+        "codex isolation", "ok", f"{', '.join(SESSION_ISOLATION_FLAGS)} {active}"
+    )
+
+
 def _codex_checks() -> list[Check]:
     """Diagnose the optional second agent.
 
@@ -172,32 +209,8 @@ def _codex_checks() -> list[Check]:
         )
         return checks
 
-    missing = [flag for flag in REQUIRED_EXEC_FLAGS if flag not in help_output]
-    checks.append(
-        Check(
-            "codex flag surface",
-            "fail",
-            f"missing required flags: {', '.join(missing)}",
-        )
-        if missing
-        else Check(
-            "codex flag surface",
-            "ok",
-            f"all required flags present: {', '.join(REQUIRED_EXEC_FLAGS)}",
-        )
-    )
-
-    missing_isolation = [f for f in ISOLATION_FLAGS if f not in help_output]
-    checks.append(
-        Check(
-            "codex isolation",
-            "warn",
-            f"this CLI has no {', '.join(missing_isolation)}, so runs may "
-            "inherit the host's config or leave session files behind",
-        )
-        if missing_isolation
-        else Check("codex isolation", "ok", f"{', '.join(ISOLATION_FLAGS)} available")
-    )
+    checks.append(_codex_flag_check(help_output))
+    checks.append(_codex_isolation_check(help_output))
     return checks
 
 

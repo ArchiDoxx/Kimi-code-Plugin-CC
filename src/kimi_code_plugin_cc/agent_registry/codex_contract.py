@@ -40,15 +40,23 @@ MODEL_FLAG = "-m"
 # starts (verified: `codex exec --hello` -> "unexpected argument found").
 ARGS_SEPARATOR = "--"
 
-# What the contract test and `doctor` look for in `codex exec --help`. The
-# *combined* spellings are pinned because the adapter emits the short forms: a
-# CLI that kept `--output-last-message` but dropped `-o` would break every run,
-# and a long-form-only check would not notice.
+# What the contract test and `doctor` look for in `codex exec --help`: the
+# flags whose absence breaks *every* default run. The *combined* spellings are
+# pinned because the adapter emits the short forms — a CLI that kept
+# `--output-last-message` but dropped `-o` would break every run, and a
+# long-form-only check would not notice.
+#
+# `--skip-git-repo-check` belongs here, not with the optional isolation flags
+# below: the default worktree is never a git repository, so without it codex
+# refuses to start. The adapter still capability-gates it (passing an unknown
+# flag to an older CLI would break the run even harder), but `doctor` must
+# report its absence as a failure rather than a cosmetic warning.
 REQUIRED_EXEC_FLAGS = (
     "-s, --sandbox",
     "--json",
     "-o, --output-last-message",
     "-m, --model",
+    "--skip-git-repo-check",
 )
 
 # Invariant 2 — structural ban on auto-approve. These are codex's equivalents
@@ -94,10 +102,11 @@ SKIP_GIT_REPO_CHECK_FLAG = "--skip-git-repo-check"
 # session store clean. Caveat: --ignore-user-config also skips config.toml, so
 # model aliases or custom providers defined there stop resolving; that surfaces
 # as a loud CLI error, and KIMI_CODEX_ISOLATE_SESSION=0 turns it off.
+# Genuinely optional, unlike --skip-git-repo-check: a CLI without these still
+# runs, just less reproducibly, so `doctor` reports their absence as a warning.
 EPHEMERAL_FLAG = "--ephemeral"
 IGNORE_USER_CONFIG_FLAG = "--ignore-user-config"
 SESSION_ISOLATION_FLAGS = (EPHEMERAL_FLAG, IGNORE_USER_CONFIG_FLAG)
-ISOLATION_FLAGS = (*SESSION_ISOLATION_FLAGS, SKIP_GIT_REPO_CHECK_FLAG)
 ENV_ISOLATE_SESSION = "KIMI_CODEX_ISOLATE_SESSION"
 
 # The CLI writes the final message into a directory of ours, deliberately

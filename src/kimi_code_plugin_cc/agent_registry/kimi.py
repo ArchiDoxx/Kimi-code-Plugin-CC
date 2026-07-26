@@ -17,6 +17,7 @@ from kimi_code_plugin_cc.agent_registry.common import (
 )
 from kimi_code_plugin_cc.bridge.runner import (
     DEPTH_ENV_VAR,
+    AuthEnv,
     RunResult,
     assert_spawn_allowed,
     run_agent_process,
@@ -45,6 +46,17 @@ KIMI_EXECUTABLE = "kimi"
 # Install channel, reported when the CLI is not on PATH.
 INSTALL_HINT = (
     "Install it with 'npm i -g @moonshot-ai/kimi-code', then run 'kimi --version'."
+)
+
+# Host credentials this agent may receive. Kimi Code is Moonshot's CLI;
+# API-key deployments use MOONSHOT_API_KEY, and ANTHROPIC_* covers
+# Anthropic-compatible endpoints. Non-secret KIMI_* config (KIMI_MAX_POLICY,
+# KIMI_ISOLATE_SKILLS) rides along on the same prefix — harmless, and splitting
+# it would complicate auth passthrough for no gain. No OpenAI variables: kimi
+# has no use for them, and forwarding them would hand one vendor's CLI another
+# vendor's key.
+AUTH_ENV = AuthEnv(
+    prefixes=("KIMI_", "ANTHROPIC_", "MOONSHOT_"), exact=frozenset({"API_KEY"})
 )
 
 # Returned when the CLI produces no usable text. Worded so a review loop reads
@@ -213,6 +225,7 @@ class KimiCodeAdapter(AgentAdapter):
                 max_depth=DEFAULT_MAX_DEPTH,
                 cwd=workdir,
                 early_exit_check=is_resume_hint_event,
+                auth_env=AUTH_ENV,
             )
         finally:
             if own_workdir is not None:

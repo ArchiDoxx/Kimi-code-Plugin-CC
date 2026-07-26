@@ -185,6 +185,26 @@ class TestCodexChecks:
             checks = run_checks()
         assert _find(checks, "codex isolation").status == "ok"
 
+    def test_codex_without_skip_git_repo_check_is_fatal(self) -> None:
+        """Its absence breaks every default run, so it is not a warning.
+
+        The isolated worktree is never a git repository, so a codex that
+        cannot skip the repo check refuses to start — exactly the class of
+        breakage doctor exists to catch before the first review.
+        """
+        stripped = CODEX_EXEC_HELP.replace(
+            "      --skip-git-repo-check        Allow running outside a Git "
+            "repository\n",
+            "",
+        )
+        which, deshim, version, help_ = _healthy_cli(codex_help=stripped)
+        with which, deshim, version, help_:
+            checks = run_checks()
+        flag_check = _find(checks, "codex flag surface")
+        assert flag_check.status == "fail"
+        assert "--skip-git-repo-check" in flag_check.detail
+        assert has_failure(checks) is True
+
     def test_codex_without_isolation_flags_only_warns(self) -> None:
         stripped = CODEX_EXEC_HELP.replace(
             "      --ephemeral                  Run without persisting session files\n",
