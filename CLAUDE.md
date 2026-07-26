@@ -22,10 +22,13 @@ on Windows.**
   `-o/--output-last-message` file rather than stdout — a missing or empty file
   is a failure even on exit 0. Plugin policy maps to `--sandbox` (`read-only`;
   `workspace-write` only up to `KIMI_MAX_POLICY`), and `explicit` is refused
-  because `codex exec` cannot ask a human. Guards shared by both adapters
-  (prompt-size cap, model-alias validation, Windows `.cmd` de-shimming, PATH
-  resolution) live in `agent_registry/common.py` — a second copy of a security
-  guard is a defect, not duplication.
+  because `codex exec` cannot ask a human. Its pinned CLI surface (flags,
+  banned capabilities, policy map) lives in `agent_registry/codex_contract.py`,
+  which `doctor` and the contract test consume without importing the adapter.
+  Guards shared by both adapters (prompt-size cap, model-alias validation,
+  Windows `.cmd` de-shimming, PATH resolution) live in
+  `agent_registry/common.py` — a second copy of a security guard is a defect,
+  not duplication.
 - `src/kimi_code_plugin_cc/agent_registry/capabilities.py` — runtime detection of
   what the installed CLI supports, cached per process and fail-safe (unknown =
   not supported). Gate every flag beyond `-p`/`--output-format`/`-m` through it;
