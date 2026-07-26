@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 from datetime import UTC, datetime
@@ -34,6 +35,10 @@ _ENV_KEEP = "KIMI_TRANSCRIPT_KEEP"
 DEFAULT_KEEP = 50
 SCHEMA_VERSION = 1
 _FALSEY = frozenset({"0", "false", "no", "off"})
+# Shape of the run directories this module creates (see ``start``). Pruning
+# must only ever delete directories that provably match it: the base dir is
+# user-configurable, so anything else in there is not ours to remove.
+_RUN_ID_RE = re.compile(r"\d{8}T\d{6}Z-[a-z]+-[0-9a-f]{6}")
 
 
 def _utc_now() -> str:
@@ -74,11 +79,15 @@ def _prune(base: Path, keep: int) -> None:
     """Remove all but the *keep* newest run directories under *base*.
 
     Run ids start with a UTC timestamp, so lexical sort order is
-    chronological. Failures are ignored on purpose: pruning is housekeeping
-    and must never affect the run being started.
+    chronological. Only directories matching ``_RUN_ID_RE`` are considered:
+    the base directory is user-configurable, so unrelated content in it must
+    never be touched. Failures are ignored on purpose: pruning is
+    housekeeping and must never affect the run being started.
     """
     try:
-        run_dirs = sorted(p for p in base.iterdir() if p.is_dir())
+        run_dirs = sorted(
+            p for p in base.iterdir() if p.is_dir() and _RUN_ID_RE.fullmatch(p.name)
+        )
     except OSError:
         return
     for old in run_dirs[:-keep]:

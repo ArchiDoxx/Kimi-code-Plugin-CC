@@ -207,6 +207,43 @@ def test_start_prunes_oldest_runs_beyond_keep(
     assert Path(recorder.path).name in remaining
 
 
+def test_prune_never_touches_foreign_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The base dir is user-configurable; pruning must only delete run dirs.
+
+    Regression test for a review finding: pruning used to rmtree every
+    subdirectory of the base dir, so pointing KIMI_TRANSCRIPT_DIR at a
+    directory with existing content destroyed user data.
+    """
+    monkeypatch.setenv("KIMI_TRANSCRIPT_DIR", str(tmp_path))
+    monkeypatch.setenv("KIMI_TRANSCRIPT_KEEP", "1")
+    monkeypatch.delenv("KIMI_TRANSCRIPTS", raising=False)
+    # Foreign content that sorts before, between, and after run ids.
+    (tmp_path / "0-aardvark").mkdir()
+    (tmp_path / "backup-2024").mkdir()
+    (tmp_path / "backup-2024" / "important.txt").write_text(
+        "do not delete me", encoding="utf-8"
+    )
+    (tmp_path / "zz-last").mkdir()
+    (tmp_path / "loose-file.txt").write_text("also not ours", encoding="utf-8")
+    # Two old run dirs; KEEP=1 forces pruning to actually delete something.
+    (tmp_path / "20260101T000000Z-santa-abcdef").mkdir()
+    (tmp_path / "20260102T000000Z-review-abcdef").mkdir()
+
+    recorder = TranscriptRecorder.start("santa", dict(_META))
+    assert recorder is not None
+
+    remaining = {p.name for p in tmp_path.iterdir()}
+    # All foreign content survived, including its nested file.
+    assert {"0-aardvark", "backup-2024", "zz-last", "loose-file.txt"} <= remaining
+    assert (tmp_path / "backup-2024" / "important.txt").read_text(
+        encoding="utf-8"
+    ) == "do not delete me"
+    # Pruning still works on real run dirs: the oldest one is gone.
+    assert "20260101T000000Z-santa-abcdef" not in remaining
+
+
 @pytest.mark.parametrize("garbage", ["banana", "-3"])
 def test_garbage_keep_falls_back_to_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, garbage: str
@@ -214,16 +251,16 @@ def test_garbage_keep_falls_back_to_default(
     monkeypatch.setenv("KIMI_TRANSCRIPT_DIR", str(tmp_path))
     monkeypatch.setenv("KIMI_TRANSCRIPT_KEEP", garbage)
     monkeypatch.delenv("KIMI_TRANSCRIPTS", raising=False)
-    for i in range(52):  # default KEEP (50) + 2
-        (tmp_path / f"20260101T0000{i:02d}Z-santa-abcde{i}").mkdir()
+    for i in range(52):  # default KEEP (50) + 2; suffixes must be valid run ids
+        (tmp_path / f"20260101T0000{i:02d}Z-santa-{i:06x}").mkdir()
 
     recorder = TranscriptRecorder.start("santa", dict(_META))
     assert recorder is not None
 
     # 50 kept + the one just created; the two oldest were pruned.
     assert len([p for p in tmp_path.iterdir() if p.is_dir()]) == 51
-    assert not (tmp_path / "20260101T000000Z-santa-abcde0").exists()
-    assert not (tmp_path / "20260101T000001Z-santa-abcde1").exists()
+    assert not (tmp_path / "20260101T000000Z-santa-000000").exists()
+    assert not (tmp_path / "20260101T000001Z-santa-000001").exists()
 
 
 def test_run_id_is_lexically_sortable_and_wellformed(
