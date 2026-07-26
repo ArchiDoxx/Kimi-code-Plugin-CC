@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Literal
 
 from kimi_code_plugin_cc.agent_registry.capabilities import cli_version, help_text
-from kimi_code_plugin_cc.agent_registry.codex import (
+from kimi_code_plugin_cc.agent_registry.codex_contract import (
     CODEX_EXECUTABLE,
     EXEC_SUBCOMMAND,
     INSTALL_HINT,

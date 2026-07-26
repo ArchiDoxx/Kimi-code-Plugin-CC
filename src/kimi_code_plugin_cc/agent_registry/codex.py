@@ -2,21 +2,18 @@
 
 Second real agent behind the bridge, and the proof that the ``AgentAdapter``
 abstraction generalises: registry, shared runner, policy cap, error contract
-and capability probing are all reused unchanged.
-
-Two things differ from the kimi adapter and drive the design here:
+and capability probing are all reused unchanged. Two things differ from kimi:
 
 **Completion.** ``codex exec`` is batch — it prints, writes its final message,
 and exits on its own, so there is no completion sentinel and no process tree to
 reap (kimi needs both, because long-lived MCP servers keep it alive after it
-has answered). The runner's timeout is a pure backstop, not the expected
-completion path.
+has answered). The runner's timeout is a pure backstop.
 
 **Payload.** The answer comes from the ``-o/--output-last-message`` file, not
-from stdout. The ``--json`` event stream is captured for diagnostics only;
-parsing it is deliberately not load-bearing, so an upstream schema change
-cannot silently corrupt a review verdict. A missing or empty file is a failure
-even on exit 0 — an empty answer must never read as an approval.
+from stdout. The ``--json`` event stream is diagnostics only; parsing it is
+deliberately not load-bearing, so an upstream schema change cannot silently
+corrupt a review verdict. A missing or empty file is a failure even on exit 0 —
+an empty answer must never read as an approval.
 
 Flag surface verified live against ``codex-cli 0.145.0`` (``codex exec
 --help``, 2026-07-26). Everything beyond the base surface is capability-gated;
@@ -32,6 +29,22 @@ from pathlib import Path
 from typing import cast
 
 from kimi_code_plugin_cc.agent_registry.capabilities import supports_flag
+from kimi_code_plugin_cc.agent_registry.codex_contract import (
+    ALLOWED_SANDBOX_MODES,
+    ARGS_SEPARATOR,
+    CODEX_EXECUTABLE,
+    ENV_ISOLATE_SESSION,
+    EXEC_SUBCOMMAND,
+    INSTALL_HINT,
+    JSON_FLAG,
+    LAST_MESSAGE_FILENAME,
+    MODEL_FLAG,
+    OUTPUT_FLAG,
+    POLICY_TO_SANDBOX,
+    SANDBOX_FLAG,
+    SESSION_ISOLATION_FLAGS,
+    SKIP_GIT_REPO_CHECK_FLAG,
+)
 from kimi_code_plugin_cc.agent_registry.common import (
     assert_prompt_fits,
     env_flag_enabled,
@@ -57,84 +70,7 @@ from kimi_code_plugin_cc.security.policy import (
 
 from .base import AgentAdapter
 
-CODEX_EXECUTABLE = "codex"
 DEFAULT_TIMEOUT_SECONDS = 600
-
-# Install channel, verified against the project's own README (openai/codex).
-INSTALL_HINT = (
-    "Install the Codex CLI with 'npm install -g @openai/codex' "
-    "(or 'brew install --cask codex'), then run 'codex --version'."
-)
-
-# Pinned base surface, verified live against codex-cli 0.145.0. Anything not in
-# this list is capability-gated — do not add a flag here just because your CLI
-# has it.
-EXEC_SUBCOMMAND = "exec"
-SANDBOX_FLAG = "--sandbox"
-JSON_FLAG = "--json"
-OUTPUT_FLAG = "-o"
-MODEL_FLAG = "-m"
-
-# Everything after this is a positional argument. Without it clap parses a
-# prompt beginning with '-' as an unknown flag and the run dies before it
-# starts (verified: `codex exec --hello` -> "unexpected argument found").
-ARGS_SEPARATOR = "--"
-
-# Long-form spellings of the flags above, used by the contract test and by
-# `doctor` to check the installed CLI still offers what the adapter emits.
-REQUIRED_EXEC_FLAGS = ("--sandbox", "--json", "--output-last-message", "--model")
-
-# Invariant 2 — structural ban on auto-approve. These are codex's equivalents
-# of kimi's --yolo and are NEVER emitted, for any input: the strings appear in
-# no code path that builds argv, and _build_base_command re-asserts the ban as
-# defense in depth.
-NEVER_FLAGS = (
-    "--dangerously-bypass-approvals-and-sandbox",
-    "--dangerously-bypass-hook-trust",
-)
-BANNED_SANDBOX_MODE = "danger-full-access"
-
-# The only sandbox modes the plugin's policy model can produce. An allowlist,
-# so a future mapping edit cannot widen the sandbox by accident.
-ALLOWED_SANDBOX_MODES = frozenset({"read-only", "workspace-write"})
-
-# Plugin policy -> codex sandbox mode.
-#
-# 'explicit' is deliberately absent: it means "a human approves each action",
-# and `codex exec` is non-interactive, so there is nobody to ask. Recording a
-# policy the CLI cannot enact is the defect this repo already refuses for kimi,
-# so the adapter raises rather than silently downgrading.
-#
-# Unlike kimi, 'accept-edits' IS enactable here (`--sandbox workspace-write` is
-# a verified flag), so it is honoured — but only up to the KIMI_MAX_POLICY
-# ceiling (read-only by default) and only inside the isolated worktree.
-POLICY_TO_SANDBOX = {
-    "read-only": "read-only",
-    "accept-edits": "workspace-write",
-}
-
-# Capability-gated flags. --skip-git-repo-check is not optional in practice:
-# the isolated worktree is a bare temp directory, and codex refuses to start
-# outside a git repository ("Not inside a trusted directory and
-# --skip-git-repo-check was not specified", verified live). It only permits a
-# run we deliberately want and never widens the sandbox, so it is not part of
-# the isolation opt-out below.
-SKIP_GIT_REPO_CHECK_FLAG = "--skip-git-repo-check"
-
-# Session isolation makes reviews reproducible and keeps the user's ~/.codex
-# session store clean. Caveat: --ignore-user-config also skips config.toml, so
-# model aliases or custom providers defined there stop resolving; that surfaces
-# as a loud CLI error, and KIMI_CODEX_ISOLATE_SESSION=0 turns it off.
-EPHEMERAL_FLAG = "--ephemeral"
-IGNORE_USER_CONFIG_FLAG = "--ignore-user-config"
-SESSION_ISOLATION_FLAGS = (EPHEMERAL_FLAG, IGNORE_USER_CONFIG_FLAG)
-ISOLATION_FLAGS = (*SESSION_ISOLATION_FLAGS, SKIP_GIT_REPO_CHECK_FLAG)
-ENV_ISOLATE_SESSION = "KIMI_CODEX_ISOLATE_SESSION"
-
-# The CLI writes the final message into a directory of ours, deliberately
-# OUTSIDE the agent's working root: under `workspace-write` a model-generated
-# command could otherwise overwrite the very file we treat as the answer.
-LAST_MESSAGE_FILENAME = "last-message.txt"
 _OUTBOX_PREFIX = "kimi_codex_out_"
 
 # How much stdout to quote when a run fails without writing to stderr.
@@ -171,10 +107,15 @@ def read_final_message(path: Path, result: RunResult) -> str:
         )
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
+        # UnicodeDecodeError is a ValueError, not an OSError, so it must be
+        # named or it escapes as 'invalid_input' — blaming the caller for
+        # output the agent produced. Decoding stays strict: errors="replace"
+        # would turn undecodable bytes into a non-empty payload that a review
+        # loop might read as a real answer.
         raise RuntimeError(
-            "Codex CLI exited cleanly but wrote no final message to "
-            f"{path.name}: {_failure_context(result)}"
+            f"Codex CLI exited cleanly but wrote no final message to {path.name} "
+            f"(missing or undecodable): {_failure_context(result)}"
         ) from exc
     if not text.strip():
         raise RuntimeError(
@@ -192,6 +133,13 @@ class CodexAdapter(AgentAdapter):
     process-spawning code path in the plugin. This adapter owns only the
     codex-specific concerns: command shape, policy-to-sandbox mapping,
     capability gating, and reading the last-message file.
+
+    Concurrency: by default every :meth:`run` gets its own worktree and output
+    directory, so calls are independent. The two constructor opt-outs trade
+    that away — ``worktree=<path>`` makes overlapping runs share one working
+    directory, and ``use_isolated_worktree=False`` runs codex in the host's
+    current directory. Neither is reachable from per-call context, so an
+    untrusted prompt cannot select them.
     """
 
     def __init__(
@@ -217,6 +165,11 @@ class CodexAdapter(AgentAdapter):
     @property
     def name(self) -> str:
         return self._name
+
+    @property
+    def _owns_worktree(self) -> bool:
+        """True when each run creates (and must clean up) its own worktree."""
+        return self._use_isolated_worktree and self._worktree is None
 
     async def run(self, prompt: str, context: dict | None = None) -> AgentMessage:
         """Run ``codex exec`` and return the message it wrote to ``-o``."""
@@ -276,17 +229,15 @@ class CodexAdapter(AgentAdapter):
         assert_spawn_allowed(depth, DEFAULT_MAX_DEPTH)
 
         prefix = resolve_executable(CODEX_EXECUTABLE, INSTALL_HINT)
-        workdir = self._resolve_workdir()
-        # We own the worktree only if we created it fresh this turn; an
-        # explicitly supplied worktree is caller-managed.
-        own_workdir = (
-            workdir
-            if (self._use_isolated_worktree and self._worktree is None)
-            else None
-        )
-        outbox = Path(tempfile.mkdtemp(prefix=_OUTBOX_PREFIX))
-        last_message = outbox / LAST_MESSAGE_FILENAME
+        # Both directories are created inside the try with their handles
+        # pre-bound to None, so a failure creating the second still lets the
+        # finally remove the first. Creating either before the try leaks it.
+        workdir: Path | None = None
+        outbox: Path | None = None
         try:
+            outbox = Path(tempfile.mkdtemp(prefix=_OUTBOX_PREFIX))
+            workdir = self._resolve_workdir()
+            last_message = outbox / LAST_MESSAGE_FILENAME
             command = await self._build_command(
                 prefix, prompt, sandbox, model, last_message
             )
@@ -302,9 +253,12 @@ class CodexAdapter(AgentAdapter):
             )
             return read_final_message(last_message, result)
         finally:
-            shutil.rmtree(outbox, ignore_errors=True)
-            if own_workdir is not None:
-                shutil.rmtree(own_workdir, ignore_errors=True)
+            if outbox is not None:
+                shutil.rmtree(outbox, ignore_errors=True)
+            # Only a worktree we created this turn is ours to remove; an
+            # explicitly supplied one is caller-managed.
+            if workdir is not None and self._owns_worktree:
+                shutil.rmtree(workdir, ignore_errors=True)
 
     def _build_base_command(
         self, prefix: list[str], sandbox: str, last_message: Path
@@ -361,7 +315,9 @@ class CodexAdapter(AgentAdapter):
         Fail-safe: a flag the installed CLI does not advertise is omitted,
         because passing an unknown flag would make every call fail. The probe
         targets ``codex exec --help`` — these flags live on the subcommand, not
-        on the top-level command.
+        on the top-level command. The three lookups below cost at most one
+        subprocess in total: ``capabilities.help_text`` caches the output per
+        argv prefix for the life of the process.
         """
         probe_prefix = [*prefix, EXEC_SUBCOMMAND]
         flags: list[str] = []

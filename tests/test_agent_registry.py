@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -17,13 +18,13 @@ from kimi_code_plugin_cc.agent_registry import (
     register,
 )
 from kimi_code_plugin_cc.agent_registry.base import AgentAdapter
-from kimi_code_plugin_cc.agent_registry.codex import (
+from kimi_code_plugin_cc.agent_registry.codex import CodexAdapter
+from kimi_code_plugin_cc.agent_registry.codex_contract import (
     BANNED_SANDBOX_MODE,
     ENV_ISOLATE_SESSION,
     LAST_MESSAGE_FILENAME,
     NEVER_FLAGS,
     OUTPUT_FLAG,
-    CodexAdapter,
 )
 from kimi_code_plugin_cc.agent_registry.common import DEFAULT_MAX_PROMPT_CHARS
 from kimi_code_plugin_cc.agent_registry.kimi import is_resume_hint_event
@@ -1045,6 +1046,90 @@ class TestCodexWorkdirAndDiagnostics:
             pytest.raises(RuntimeError, match="no output on either stream"),
         ):
             mock_run.side_effect = _codex_runner(returncode=1, write_last_message=False)
+            await adapter.run("prompt", {})
+
+    async def test_no_temp_dir_leaks_when_setup_fails_midway(self) -> None:
+        """Regression: a failure between the two mkdtemp calls leaked a dir.
+
+        The output directory used to be created after the worktree and outside
+        the try, so an error in between skipped the cleanup entirely. In a
+        long-running MCP session those leaks accumulate silently.
+        """
+        adapter = CodexAdapter()
+        created: list[Path] = []
+        real_mkdtemp = tempfile.mkdtemp
+
+        def _tracking_mkdtemp(*args: Any, **kwargs: Any) -> str:
+            path = real_mkdtemp(*args, **kwargs)
+            created.append(Path(path))
+            return path
+
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            mock.patch(
+                f"{CODEX_MODULE}.tempfile.mkdtemp", side_effect=_tracking_mkdtemp
+            ),
+            mock.patch(
+                f"{CODEX_MODULE}.create_isolated_worktree",
+                side_effect=OSError("no space left on device"),
+            ),
+            pytest.raises(OSError, match="no space left"),
+        ):
+            await adapter.run("prompt", {})
+        mock_run.assert_not_called()
+        assert created, "expected the output directory to have been created"
+        assert not any(path.exists() for path in created), (
+            f"temp directories leaked after a failed setup: {created}"
+        )
+
+    async def test_cleanup_survives_a_failure_before_anything_was_created(
+        self,
+    ) -> None:
+        """The finally block must not itself blow up on the earliest failure.
+
+        If the very first mkdtemp fails, both directory handles are still None;
+        the cleanup has to tolerate that and let the original error surface.
+        """
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            mock.patch(
+                f"{CODEX_MODULE}.tempfile.mkdtemp",
+                side_effect=OSError("too many open files"),
+            ),
+            pytest.raises(OSError, match="too many open files"),
+        ):
+            await adapter.run("prompt", {})
+        mock_run.assert_not_called()
+
+    async def test_undecodable_final_message_is_an_agent_failure(self) -> None:
+        """Regression: UnicodeDecodeError is a ValueError, not an OSError.
+
+        Left unnamed it escaped the handler and was classified as
+        'invalid_input' — blaming the caller for bytes the agent wrote.
+        """
+        adapter = CodexAdapter()
+        run_patch, which_patch, probe_patch = _codex_mocks()
+
+        async def _writes_binary(args: list[str], **kwargs: Any) -> RunResult:
+            Path(args[args.index(OUTPUT_FLAG) + 1]).write_bytes(b"\xff\xfe\x00bad")
+            return RunResult(
+                returncode=0, stdout="", stderr="", args=list(args), env={}
+            )
+
+        with (
+            run_patch as mock_run,
+            which_patch,
+            probe_patch,
+            pytest.raises(RuntimeError, match="no final message"),
+        ):
+            mock_run.side_effect = _writes_binary
             await adapter.run("prompt", {})
 
     async def test_non_string_policy_is_rejected_before_spawn(self) -> None:

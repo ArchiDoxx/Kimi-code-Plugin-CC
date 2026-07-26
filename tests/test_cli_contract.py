@@ -16,7 +16,7 @@ import subprocess
 
 import pytest
 
-from kimi_code_plugin_cc.agent_registry.codex import (
+from kimi_code_plugin_cc.agent_registry.codex_contract import (
     BANNED_SANDBOX_MODE,
     NEVER_FLAGS,
     REQUIRED_EXEC_FLAGS,
