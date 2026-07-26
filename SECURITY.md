@@ -8,7 +8,7 @@ leaving it implied by the code.
 
 | Guarantee | How it is enforced |
 |---|---|
-| No auto-approve flags | `--yolo`, `-y`, `--auto`, `--afk` are never constructed. They cannot be reached through configuration or a model-supplied value. |
+| No auto-approve flags | kimi: `--yolo`, `-y`, `--auto`, `--afk`. codex: `--dangerously-bypass-approvals-and-sandbox`, `--dangerously-bypass-hook-trust`, and the sandbox value `danger-full-access`. None of these are ever constructed; they cannot be reached through configuration or a model-supplied value. A contract test pins the flag names against the installed CLI, so an upstream rename breaks the build instead of silently unenforcing the ban. |
 | Read-only by default | `KIMI_MAX_POLICY` caps every request. A policy above `read-only` is refused with an error rather than recorded as granted but never enforced. |
 | Filesystem isolation | Each turn runs in a fresh directory under the system temp dir (`KIMI_WORKTREE_BASE` to relocate). The agent never gets the host repository as its working directory. |
 | No secret forwarding | The child environment is built from an allowlist, not inherited wholesale. Only `PATH`-class variables and `KIMI_*` / `ANTHROPIC_*` / `MOONSHOT_*` auth variables are passed through. |

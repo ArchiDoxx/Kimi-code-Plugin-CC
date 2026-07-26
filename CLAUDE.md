@@ -16,8 +16,16 @@ on Windows.**
   process tree is killed — `kimi -p` does not exit on its own when global MCP
   servers are configured).
 - `src/kimi_code_plugin_cc/protocol/` — Pydantic message schema with depth/bridge IDs.
-- `src/kimi_code_plugin_cc/agent_registry/` — adapter registry (`kimi` working,
-  `codex` skeleton raising `NotImplementedError` in v1.0).
+- `src/kimi_code_plugin_cc/agent_registry/` — adapter registry with two working
+  adapters, `kimi` and `codex`. `codex.py` drives `codex exec`: batch, so it
+  exits on its own (no sentinel, unlike kimi), and its answer is read from the
+  `-o/--output-last-message` file rather than stdout — a missing or empty file
+  is a failure even on exit 0. Plugin policy maps to `--sandbox` (`read-only`;
+  `workspace-write` only up to `KIMI_MAX_POLICY`), and `explicit` is refused
+  because `codex exec` cannot ask a human. Guards shared by both adapters
+  (prompt-size cap, model-alias validation, Windows `.cmd` de-shimming, PATH
+  resolution) live in `agent_registry/common.py` — a second copy of a security
+  guard is a defect, not duplication.
 - `src/kimi_code_plugin_cc/agent_registry/capabilities.py` — runtime detection of
   what the installed CLI supports, cached per process and fail-safe (unknown =
   not supported). Gate every flag beyond `-p`/`--output-format`/`-m` through it;
