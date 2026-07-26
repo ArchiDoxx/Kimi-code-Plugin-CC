@@ -19,6 +19,24 @@ match `.claude-plugin/plugin.json` / `pyproject.toml`.
   `KIMI_TRANSCRIPT_DIR`. Loop results and the loop MCP tools expose the run
   directory as `transcript_dir` (`null` when recording is off).
 
+- **Transcript viewer** (`transcript_view.py`, `kimi-code-plugin transcripts`):
+  the read half of the transcript subsystem — `transcripts list [--limit N]`
+  for the newest runs (id, loop, final verdict, rounds, start time),
+  `transcripts show <run-id-or-unique-prefix>` for a run summary plus its
+  rounds, and `transcripts show <id> --round N` for the recorded round(s)
+  verbatim. Without it the audit trail existed but was only readable by
+  digging through `~/.kimi-code-plugin-cc/transcripts/` by hand. Strictly
+  read-only (no lock file, no cache, no touch), so it is safe to run against a
+  transcript a loop is still writing. The failure modes it is built for are
+  the runs worth auditing: a corrupt `run.json` lists as `(unreadable)` and
+  `show` falls back to the round files on disk, a round file `run.json`
+  promises but disk lacks becomes a marked row, an unfinalized run lists as
+  `(incomplete)` — none of it a traceback. Output survives a non-UTF-8 console
+  (a single unicode arrow in a review used to be enough for
+  `UnicodeEncodeError` to eat the whole page). Exit codes: `0` for every
+  success path including an empty listing, `1` for an unknown or ambiguous run
+  id and for a missing round.
+
 - **Daily CLI canary** (`.github/workflows/canary.yml`): installs the *latest*
   `@moonshot-ai/kimi-code` on Linux and Windows every day, verifies the pinned
   flag surface (`tests/test_cli_contract.py`) and runs `doctor`. Upstream CLI
