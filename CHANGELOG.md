@@ -4,6 +4,18 @@ Technical release log for `kimi-code-plugin-cc`. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver and
 match `.claude-plugin/plugin.json` / `pyproject.toml`.
 
+## [Unreleased]
+
+### Added
+
+- **Daily CLI canary** (`.github/workflows/canary.yml`): installs the *latest*
+  `@moonshot-ai/kimi-code` on Linux and Windows every day, verifies the pinned
+  flag surface (`tests/test_cli_contract.py`) and runs `doctor`. Upstream CLI
+  drift becomes a failure notification within a day instead of a broken review
+  on a user's machine. A hard `kimi --version` step prevents the contract test
+  from skipping itself silently. Contract tier only — no credentials; a live
+  round-trip tier can be added later via an API-key secret.
+
 ## [1.4.0] — 2026-07-25
 
 Loop-correctness and operability release. The loops were sound in round 1 and

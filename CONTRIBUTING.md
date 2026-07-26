@@ -33,7 +33,11 @@ uv run pytest -m live                      # full round-trip, needs a real CLI
 
 `tests/test_cli_contract.py` skips itself when the CLI is absent, so it is safe
 in CI. Run it after every agent-CLI update — it is the cheapest way to catch a
-flag surface that moved.
+flag surface that moved. The daily **CLI canary**
+(`.github/workflows/canary.yml`) automates exactly this: it installs the
+latest CLI on Linux and Windows, guards against silent skips with a hard
+`kimi --version` step, and runs the contract test plus `doctor`. A red canary
+means the upstream CLI drifted, not that the repo broke.
 
 ## Principles worth knowing before you change behaviour
 

@@ -1,6 +1,7 @@
 # Kimi-Code-Plugin-CC
 
 [![CI](https://github.com/ArchiDoxx/Kimi-code-Plugin-CC/actions/workflows/ci.yml/badge.svg)](https://github.com/ArchiDoxx/Kimi-code-Plugin-CC/actions/workflows/ci.yml)
+[![CLI canary](https://github.com/ArchiDoxx/Kimi-code-Plugin-CC/actions/workflows/canary.yml/badge.svg)](https://github.com/ArchiDoxx/Kimi-code-Plugin-CC/actions/workflows/canary.yml)
 [![Release](https://img.shields.io/github/v/release/ArchiDoxx/Kimi-code-Plugin-CC)](https://github.com/ArchiDoxx/Kimi-code-Plugin-CC/releases)
 [![License: MIT](https://img.shields.io/github/license/ArchiDoxx/Kimi-code-Plugin-CC)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)

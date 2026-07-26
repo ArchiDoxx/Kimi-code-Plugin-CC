@@ -1,0 +1,57 @@
+name: CLI canary
+
+# Early warning for upstream drift in @moonshot-ai/kimi-code. Installs the
+# LATEST CLI every day (deliberately unpinned - detecting drift is the point)
+# and verifies the flag surface and preflight the adapter depends on, so a
+# breaking CLI release becomes a failure email within a day instead of a
+# broken review on a user's machine.
+#
+# Contract tier only: no credentials, no live agent run. A green canary means
+# "interface intact", not "reviews verified end-to-end" - the live tier needs
+# an API-key secret and is a separate, deliberate step.
+#
+# Note: GitHub disables scheduled workflows after ~60 days without repo
+# activity; re-enable from the Actions tab if that happens.
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: ${{ matrix.os }} / latest CLI
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install latest agent CLI
+        run: npm install -g @moonshot-ai/kimi-code
+
+      # Hard failure if the CLI did not land on PATH. Without this guard the
+      # contract test below would skip itself and the canary would go green
+      # while testing nothing.
+      - name: CLI resolves
+        run: kimi --version
+
+      - name: Install uv
+        # Full tag: setup-uv publishes v9.0.0 but no moving v9 major tag.
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --extra dev
+
+      - name: Contract test (pinned flag surface vs installed CLI)
+        run: uv run pytest tests/test_cli_contract.py -v -rs
+
+      - name: Doctor preflight
+        run: uv run kimi-code-plugin doctor
