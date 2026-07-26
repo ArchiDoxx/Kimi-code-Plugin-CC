@@ -1,15 +1,28 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "kimi-code-cc",
-  "description": "Local marketplace for the kimi-code-plugin-cc plugin (Kimi Code as an external review agent inside Claude Code).",
+  "description": "Marketplace for kimi-code-plugin-cc: Kimi Code as an external review agent inside Claude Code.",
   "owner": {
-    "name": "Kimi-Code-Plugin-CC Contributors"
+    "name": "Kimi-Code-Plugin-CC Contributors",
+    "url": "https://github.com/ArchiDoxx/Kimi-code-Plugin-CC"
   },
   "plugins": [
     {
       "name": "kimi-code-plugin-cc",
       "source": "./",
-      "description": "Bridge headless CLI agents (Kimi Code, Codex, ...) into Claude Code with review and planning loops."
+      "description": "Bridge headless CLI agents (Kimi Code, Codex, ...) into Claude Code with review and planning loops.",
+      "category": "code-review",
+      "keywords": [
+        "code-review",
+        "second-opinion",
+        "external-reviewer",
+        "adversarial-review",
+        "kimi",
+        "mcp"
+      ],
+      "homepage": "https://github.com/ArchiDoxx/Kimi-code-Plugin-CC",
+      "repository": "https://github.com/ArchiDoxx/Kimi-code-Plugin-CC",
+      "license": "MIT"
     }
   ]
 }

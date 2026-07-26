@@ -1,5 +1,10 @@
 # Kimi-Code-Plugin-CC
 
+[![CI](https://github.com/ArchiDoxx/Kimi-code-Plugin-CC/actions/workflows/ci.yml/badge.svg)](https://github.com/ArchiDoxx/Kimi-code-Plugin-CC/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ArchiDoxx/Kimi-code-Plugin-CC)](https://github.com/ArchiDoxx/Kimi-code-Plugin-CC/releases)
+[![License: MIT](https://img.shields.io/github/license/ArchiDoxx/Kimi-code-Plugin-CC)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
+
 A Claude Code plugin that brings headless CLI agents (Kimi Code, Codex, …) into
 Claude Code as first-class subagents — so you can use Kimi Code as an **external
 reviewer** for daily coding tasks (`/kimi-code-review`, `/kimi-opinion`) plus
@@ -138,20 +143,20 @@ and [SECURITY.md](SECURITY.md) for the threat model.
 
 ## Install in Claude Code
 
-From inside this repo's directory in a Claude Code session:
+From any Claude Code session:
 
 ```
-/plugin marketplace add ./
+/plugin marketplace add ArchiDoxx/Kimi-code-Plugin-CC
 /plugin install kimi-code-plugin-cc@kimi-code-cc
 ```
 
 `kimi-code-cc` is the marketplace name declared in
-`.claude-plugin/marketplace.json`. For a GitHub-based install, push the repo
-publicly and use `/plugin marketplace add <user>/<repo>` instead. The canonical
-repository is `https://github.com/ArchiDoxx/Kimi-code-Plugin-CC`, so:
+`.claude-plugin/marketplace.json`. For local development, add the checkout
+itself as the marketplace instead (from inside the repo directory):
 
 ```
-/plugin marketplace add ArchiDoxx/Kimi-code-Plugin-CC
+/plugin marketplace add ./
+/plugin install kimi-code-plugin-cc@kimi-code-cc
 ```
 
 Verify with `/plugin list` (should show `kimi-code-plugin-cc`) and
