@@ -81,12 +81,17 @@ def _make_run(
         "schema_version": 1,
         "run_id": run_id,
         "loop": loop,
-        "agents": {"primary": "kimi", "adversary": "kimi"},
         "model": None,
         "max_iterations": 3,
         "started": started,
         "rounds": recorded,
     }
+    # The loops record their agents differently: santa a mapping of roles,
+    # the single-agent loops one name (loops/santa.py vs loops/review.py).
+    if loop == "santa":
+        data["agents"] = {"primary": "kimi", "adversary": "kimi"}
+    else:
+        data["agent"] = "kimi"
     if finished is not None:
         data["finished"] = finished
     if final is not None:
@@ -113,6 +118,16 @@ def populated(base: Path) -> Path:
     _make_run(base, RUN_MID)
     _make_run(base, RUN_NEW)
     return base
+
+
+def _write_raw_run(base: Path, run_id: str, data: dict[str, object]) -> Path:
+    """Write a run.json with exactly *data* - including shapes no loop emits."""
+    run_dir = base / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(data, ensure_ascii=False), encoding="utf-8"
+    )
+    return run_dir
 
 
 def _tree(base: Path) -> dict[str, tuple[int, int]]:
@@ -284,6 +299,116 @@ class TestShow:
         assert "(missing)" in capsys.readouterr().out
 
 
+class TestDegradedRuns:
+    """run.json shapes a crash, an older schema, or a stray editor can produce."""
+
+    def test_single_agent_loops_show_their_one_agent(
+        self, populated: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["transcripts", "show", RUN_OLD]) == 0
+
+        out = capsys.readouterr().out
+        assert "review" in out
+        assert "kimi" in out
+
+    def test_final_without_a_known_key_is_summarized(
+        self, base: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _write_raw_run(
+            base,
+            RUN_MID,
+            {"run_id": RUN_MID, "loop": "santa", "final": {"iterations": 2}},
+        )
+
+        assert main(["transcripts", "list"]) == 0
+        assert "iterations=2" in capsys.readouterr().out
+
+    def test_final_recorded_as_a_bare_value_is_shown(
+        self, base: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _write_raw_run(base, RUN_MID, {"loop": "santa", "final": "green"})
+
+        assert main(["transcripts", "list"]) == 0
+        assert "green" in capsys.readouterr().out
+
+    def test_missing_agents_and_dates_are_marked_unknown(
+        self, base: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _write_raw_run(base, RUN_MID, {"loop": "santa", "rounds": []})
+
+        assert main(["transcripts", "show", RUN_MID]) == 0
+
+        out = capsys.readouterr().out
+        assert "(unknown)" in out
+        assert "(incomplete)" in out
+        assert "No rounds recorded." in out
+
+    def test_rounds_recorded_as_a_non_list_falls_back_to_disk(
+        self, base: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _write_raw_run(base, RUN_MID, {"loop": "santa", "rounds": "n/a"})
+
+        assert main(["transcripts", "list"]) == 0
+        assert main(["transcripts", "show", RUN_MID]) == 0
+        assert "No rounds recorded." in capsys.readouterr().out
+
+    def test_round_entry_without_verdict_or_duration(
+        self, base: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _write_raw_run(
+            base,
+            RUN_MID,
+            {
+                "loop": "santa",
+                "rounds": [
+                    {
+                        "index": 1,
+                        "role": "primary",
+                        "file": "round-01-primary.md",
+                        "agent": "kimi",
+                        "verdict": None,
+                        "duration_s": None,
+                    }
+                ],
+            },
+        )
+
+        assert main(["transcripts", "show", RUN_MID]) == 0
+
+        out = capsys.readouterr().out
+        assert "(none)" in out
+        assert "(unknown)" in out
+
+    def test_round_file_name_outside_the_run_dir_is_refused(
+        self, base: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A hand-edited or foreign run.json must not steer the viewer at a path
+        # of its choosing; the name is rejected, not followed.
+        _write_raw_run(
+            base,
+            RUN_MID,
+            {"loop": "santa", "rounds": [{"index": 1, "file": "../../secrets.txt"}]},
+        )
+
+        assert main(["transcripts", "show", RUN_MID]) == 0
+        assert "(unexpected name)" in capsys.readouterr().out
+
+    def test_run_json_that_is_not_an_object_is_unreadable(
+        self, base: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        run_dir = base / RUN_MID
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text("[1, 2, 3]", encoding="utf-8")
+
+        assert main(["transcripts", "list"]) == 0
+        assert "(unreadable)" in capsys.readouterr().out
+
+    def test_list_runs_with_a_non_positive_limit_is_empty(
+        self, populated: Path
+    ) -> None:
+        assert list_runs(0) == []
+
+
 class TestShowRound:
     def test_prints_every_role_recorded_under_the_index(
         self, base: Path, capsys: pytest.CaptureFixture[str]
@@ -300,6 +425,25 @@ class TestShowRound:
         assert "## Prompt" in out
         # Primary before adversary, not alphabetical.
         assert out.index("round-01-primary.md") < out.index("round-01-adversary.md")
+
+    def test_unreadable_round_file_reports_instead_of_raising(
+        self,
+        base: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _make_run(base, RUN_MID, rounds=((1, "review"),))
+        original_read_text = Path.read_text
+
+        def failing_read_text(self: Path, *args: object, **kwargs: object) -> str:
+            if self.suffix == ".md":
+                raise OSError("simulated read failure")
+            return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "read_text", failing_read_text)
+
+        assert main(["transcripts", "show", RUN_MID, "--round", "1"]) == 0
+        assert "unreadable" in capsys.readouterr().out
 
     def test_missing_round_exits_one_without_a_traceback(
         self, populated: Path, capsys: pytest.CaptureFixture[str]
