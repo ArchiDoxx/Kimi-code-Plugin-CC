@@ -8,15 +8,18 @@ from typing import Any
 import pytest
 
 from kimi_code_plugin_cc.agent_registry import register
-from kimi_code_plugin_cc.agent_registry.base import AgentAdapter
+from kimi_code_plugin_cc.agent_registry.base import (
+    AdapterNotImplementedError,
+    AgentAdapter,
+)
 from kimi_code_plugin_cc.agent_registry.capabilities import (
     cli_version,
     reset_cache,
     supports_flag,
 )
-from kimi_code_plugin_cc.agent_registry.codex import AdapterNotImplementedError
 from kimi_code_plugin_cc.errors import (
     ERROR_PREFIX,
+    AgentNotInstalledError,
     ErrorKind,
     as_json,
     as_text,
@@ -82,6 +85,22 @@ class TestClassify:
     def test_missing_cli_message_carries_install_hint(self) -> None:
         _kind, message = classify(FileNotFoundError("kimi not on PATH"))
         assert "npm i -g" in message
+
+    def test_agent_specific_install_hint_wins_over_the_default(self) -> None:
+        """A second agent must not be told to install the first agent's CLI."""
+        kind, message = classify(
+            AgentNotInstalledError(
+                "codex", "Install it with 'npm install -g @openai/codex'."
+            )
+        )
+        assert kind is ErrorKind.NOT_INSTALLED
+        assert "@openai/codex" in message
+        assert "moonshot" not in message.lower()
+
+    def test_agent_not_installed_is_a_file_not_found_error(self) -> None:
+        # Callers (and the runner) already treat a missing binary as OSError;
+        # narrowing the type must not change that contract.
+        assert issubclass(AgentNotInstalledError, FileNotFoundError)
 
 
 class TestRendering:
@@ -154,15 +173,34 @@ class TestMcpToolsFailClosed:
         assert payload["error_kind"] == ErrorKind.UNKNOWN_AGENT.value
         assert payload["verdict"] == "red"
 
-    async def test_codex_skeleton_is_reported_not_raised(self) -> None:
+    async def test_skeleton_adapter_is_reported_not_raised(self) -> None:
+        register(
+            "skeleton",
+            FailingAdapter("skeleton", AdapterNotImplementedError("not built yet")),
+        )
         server = create_server()
         content, _meta = await server.call_tool(
             "run_agent",
-            {"agent_name": "codex", "prompt": "hi"},
+            {"agent_name": "skeleton", "prompt": "hi"},
         )
         assert content[0].text.startswith(
             f"{ERROR_PREFIX} [{ErrorKind.NOT_IMPLEMENTED.value}]"
         )
+
+    async def test_missing_codex_cli_is_reported_with_its_own_hint(self) -> None:
+        from unittest import mock
+
+        server = create_server()
+        with mock.patch(
+            "kimi_code_plugin_cc.agent_registry.codex.shutil.which", return_value=None
+        ):
+            content, _meta = await server.call_tool(
+                "run_agent",
+                {"agent_name": "codex", "prompt": "hi"},
+            )
+        text = content[0].text
+        assert text.startswith(f"{ERROR_PREFIX} [{ErrorKind.NOT_INSTALLED.value}]")
+        assert "@openai/codex" in text
 
 
 class TestCapabilityDetection:

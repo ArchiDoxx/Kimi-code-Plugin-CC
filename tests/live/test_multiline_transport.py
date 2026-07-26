@@ -20,7 +20,7 @@ import shutil
 import pytest
 
 from kimi_code_plugin_cc.agent_registry import get
-from kimi_code_plugin_cc.agent_registry.kimi import _deshim_cmd_wrapper
+from kimi_code_plugin_cc.agent_registry.common import deshim_cmd_wrapper
 
 # Opt-in marker. Register it so ``-m live`` works without extra config.
 live = pytest.mark.live
@@ -49,7 +49,7 @@ def test_deshim_resolves_cmd_shim_to_node_entry() -> None:
     """
     shim = shutil.which("kimi")
     assert shim is not None
-    deshimed = _deshim_cmd_wrapper(__import__("pathlib").Path(shim))
+    deshimed = deshim_cmd_wrapper(__import__("pathlib").Path(shim))
     if deshimed is None:
         # On POSIX there is no .cmd shim; nothing to de-shim. Skip gracefully.
         pytest.skip("not a .cmd/.bat shim (POSIX)")

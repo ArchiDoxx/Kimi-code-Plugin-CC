@@ -7,6 +7,16 @@ from abc import ABC, abstractmethod
 from kimi_code_plugin_cc.protocol.messages import AgentMessage
 
 
+class AdapterNotImplementedError(NotImplementedError):
+    """Raised when a registered adapter is a skeleton, not a usable adapter.
+
+    Distinct from bare :class:`NotImplementedError` so callers (and the MCP
+    surface) can produce a helpful message instead of a deep stack trace. It
+    lives beside the adapter contract rather than inside any one adapter, so a
+    skeleton graduating to a real implementation does not move the symbol.
+    """
+
+
 class AgentAdapter(ABC):
     """Every supported headless CLI agent implements this interface."""
 

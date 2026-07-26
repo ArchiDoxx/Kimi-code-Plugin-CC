@@ -20,11 +20,20 @@ from pathlib import Path
 from typing import Literal
 
 from kimi_code_plugin_cc.agent_registry.capabilities import cli_version, help_text
-from kimi_code_plugin_cc.agent_registry.kimi import (
+from kimi_code_plugin_cc.agent_registry.codex import (
+    CODEX_EXECUTABLE,
+    EXEC_SUBCOMMAND,
+    INSTALL_HINT,
+    ISOLATION_FLAGS,
+    REQUIRED_EXEC_FLAGS,
+)
+from kimi_code_plugin_cc.agent_registry.common import (
     DEFAULT_MAX_PROMPT_CHARS,
+    deshim_cmd_wrapper,
+    max_prompt_chars,
+)
+from kimi_code_plugin_cc.agent_registry.kimi import (
     KIMI_EXECUTABLE,
-    _deshim_cmd_wrapper,
-    _max_prompt_chars,
     _skills_isolation_enabled,
 )
 from kimi_code_plugin_cc.protocol.messages import DEFAULT_MAX_DEPTH
@@ -51,12 +60,12 @@ class Check:
     detail: str
 
 
-def _resolve_prefix() -> list[str] | None:
-    """Return the argv prefix used to invoke the agent CLI, or None if absent."""
-    executable = shutil.which(KIMI_EXECUTABLE)
+def _resolve_prefix(executable_name: str) -> list[str] | None:
+    """Return the argv prefix used to invoke *executable_name*, or None."""
+    executable = shutil.which(executable_name)
     if executable is None:
         return None
-    deshimed = _deshim_cmd_wrapper(Path(executable))
+    deshimed = deshim_cmd_wrapper(Path(executable))
     return deshimed if deshimed is not None else [executable]
 
 
@@ -123,10 +132,79 @@ def _cli_checks(prefix: list[str]) -> list[Check]:
     return checks
 
 
+def _codex_checks() -> list[Check]:
+    """Diagnose the optional second agent.
+
+    codex absence is a warning, never a failure: kimi is the primary agent and
+    the plugin is fully usable without codex. An *installed* codex whose flag
+    surface has drifted is a different matter — every codex run would fail, so
+    that is reported as a failure.
+    """
+    prefix = _resolve_prefix(CODEX_EXECUTABLE)
+    if prefix is None:
+        return [
+            Check(
+                "codex CLI",
+                "warn",
+                f"'{CODEX_EXECUTABLE}' is not on PATH. This is optional — kimi "
+                f"remains the primary agent. {INSTALL_HINT}",
+            )
+        ]
+
+    version = cli_version(prefix)
+    found = f"found at {prefix[-1]}"
+    checks = [
+        Check("codex CLI", "ok", f"{found} (version {version})" if version else found)
+    ]
+
+    # The flags the adapter emits live on the `exec` subcommand, not on the
+    # top-level command, so that is what gets probed.
+    help_output = help_text([*prefix, EXEC_SUBCOMMAND])
+    if not help_output:
+        checks.append(
+            Check(
+                "codex flag surface",
+                "fail",
+                f"'{CODEX_EXECUTABLE} {EXEC_SUBCOMMAND} --help' produced no "
+                "output, so the required flags could not be verified. Check "
+                "that the CLI runs and is authenticated.",
+            )
+        )
+        return checks
+
+    missing = [flag for flag in REQUIRED_EXEC_FLAGS if flag not in help_output]
+    checks.append(
+        Check(
+            "codex flag surface",
+            "fail",
+            f"missing required flags: {', '.join(missing)}",
+        )
+        if missing
+        else Check(
+            "codex flag surface",
+            "ok",
+            f"all required flags present: {', '.join(REQUIRED_EXEC_FLAGS)}",
+        )
+    )
+
+    missing_isolation = [f for f in ISOLATION_FLAGS if f not in help_output]
+    checks.append(
+        Check(
+            "codex isolation",
+            "warn",
+            f"this CLI has no {', '.join(missing_isolation)}, so runs may "
+            "inherit the host's config or leave session files behind",
+        )
+        if missing_isolation
+        else Check("codex isolation", "ok", f"{', '.join(ISOLATION_FLAGS)} available")
+    )
+    return checks
+
+
 def run_checks() -> list[Check]:
     """Run every diagnostic and return the results in report order."""
     checks: list[Check] = []
-    prefix = _resolve_prefix()
+    prefix = _resolve_prefix(KIMI_EXECUTABLE)
     if prefix is None:
         checks.append(
             Check(
@@ -139,6 +217,8 @@ def run_checks() -> list[Check]:
     else:
         checks.extend(_cli_checks(prefix))
 
+    checks.extend(_codex_checks())
+
     policy = read_max_policy_from_env()
     checks.append(
         Check("policy ceiling", "ok", f"KIMI_MAX_POLICY={policy.to_string()}")
@@ -147,7 +227,7 @@ def run_checks() -> list[Check]:
         Check("depth guard", "ok", f"max nested spawns = {DEFAULT_MAX_DEPTH}")
     )
 
-    limit = _max_prompt_chars()
+    limit = max_prompt_chars()
     suffix = "" if limit == DEFAULT_MAX_PROMPT_CHARS else " (overridden)"
     checks.append(Check("prompt limit", "ok", f"{limit} characters{suffix}"))
     checks.append(_check_worktree_base())

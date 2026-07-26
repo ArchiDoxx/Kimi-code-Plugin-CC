@@ -275,13 +275,19 @@ def _run_subprocess_streaming(
 # - PATH / PATHEXT / SYSTEMROOT / COMSPEC / WINDIR / APPDATA: the child needs
 #   these to find its own executables and the kimi CLI on Windows.
 # - HOME / USERPROFILE / TMP / TEMP: standard runtime locations.
-# - KIMI_* / ANTHROPIC_* / MOONSHOT_*: explicit auth passthrough so the agent
-#   can authenticate (Kimi Code is Moonshot's CLI; API-key deployments use
-#   MOONSHOT_API_KEY). These prefixes carry auth tokens the CLI needs.
-#   (Non-secret KIMI_* config vars like KIMI_MAX_POLICY ride along — harmless
-#   and non-exploitable; tightening further would complicate auth passthrough.)
-# - API_KEY / OPENAI_API_KEY: common auth var names used by some CLIs.
-_ALLOWED_ENV_PREFIXES = ("KIMI_", "ANTHROPIC_", "MOONSHOT_")
+# - KIMI_* / ANTHROPIC_* / MOONSHOT_* / OPENAI_*: explicit auth passthrough so
+#   the agent can authenticate (Kimi Code is Moonshot's CLI; API-key
+#   deployments use MOONSHOT_API_KEY. Codex is OpenAI's CLI and reads
+#   OPENAI_API_KEY / OPENAI_BASE_URL). These prefixes carry the auth tokens the
+#   CLIs need. (Non-secret KIMI_* config vars like KIMI_MAX_POLICY ride along —
+#   harmless and non-exploitable; tightening further would complicate auth
+#   passthrough.)
+# - API_KEY: common auth var name used by some CLIs.
+# - CODEX_HOME: where codex keeps auth.json and its session store; without it a
+#   non-default install location cannot authenticate. Listed exactly rather
+#   than as a CODEX_* prefix, because it is the only variable codex needs from
+#   the host and a prefix would forward future ones blindly.
+_ALLOWED_ENV_PREFIXES = ("KIMI_", "ANTHROPIC_", "MOONSHOT_", "OPENAI_")
 _ALLOWED_ENV_EXACT = frozenset(
     {
         "PATH",
@@ -296,7 +302,7 @@ _ALLOWED_ENV_EXACT = frozenset(
         "TMP",
         "TEMP",
         "API_KEY",
-        "OPENAI_API_KEY",
+        "CODEX_HOME",
     }
 )
 

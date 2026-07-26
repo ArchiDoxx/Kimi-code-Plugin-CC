@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pytest
 
 from kimi_code_plugin_cc.agent_registry import register
 from kimi_code_plugin_cc.agent_registry.base import AgentAdapter
+from kimi_code_plugin_cc.bridge.runner import RunResult
 from kimi_code_plugin_cc.loops.planning import PlanResult, planning_loop
 from kimi_code_plugin_cc.loops.prompts import STANDALONE_PREAMBLE
 from kimi_code_plugin_cc.loops.review import (
@@ -20,6 +22,8 @@ from kimi_code_plugin_cc.loops.review import (
 )
 from kimi_code_plugin_cc.loops.santa import SantaResult, SantaVerdict, santa_loop
 from kimi_code_plugin_cc.protocol.messages import AgentMessage
+
+CODEX_MODULE = "kimi_code_plugin_cc.agent_registry.codex"
 
 
 class StubAdapter(AgentAdapter):
@@ -659,3 +663,58 @@ class TestLoopTranscripts:
         ]
         data = _run_json(result.transcript_dir)
         assert data["final"] == {"status": "complete", "iterations": 3}
+
+
+class TestCodexThroughTheRegistry:
+    """Invariant 4 / plan test 11: the loops reach codex via the registry only.
+
+    These go through the real ``CodexAdapter`` (not a StubAdapter) with only the
+    subprocess mocked, so they prove the whole seam the plugin claims is
+    agent-agnostic: registry lookup, context translation, policy handling and
+    payload extraction.
+    """
+
+    def _mocks(self):
+        return (
+            mock.patch(
+                f"{CODEX_MODULE}.run_agent_process", new_callable=mock.AsyncMock
+            ),
+            mock.patch(f"{CODEX_MODULE}.shutil.which", return_value="/usr/bin/codex"),
+            mock.patch(f"{CODEX_MODULE}.supports_flag", return_value=False),
+        )
+
+    @staticmethod
+    def _writes(payload: str):
+        async def _run(args: list[str], **kwargs: Any) -> RunResult:
+            Path(args[args.index("-o") + 1]).write_text(payload, encoding="utf-8")
+            return RunResult(
+                returncode=0, stdout="", stderr="", args=list(args), env={}
+            )
+
+        return _run
+
+    async def test_review_loop_runs_codex_and_parses_its_verdict(self) -> None:
+        run_patch, which_patch, probe_patch = self._mocks()
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = self._writes("Looks correct.\nVERDICT: approve")
+            result = await review_loop("codex", "def f(): pass", max_iterations=2)
+
+        assert isinstance(result, ReviewResult)
+        assert result.verdict is ReviewVerdict.APPROVE
+        assert result.iterations == 1  # approval stops the loop early
+        mock_run.assert_called_once()
+        assert mock_run.call_args.args[0][1] == "exec"
+
+    async def test_review_loop_fails_closed_when_codex_produces_nothing(self) -> None:
+        """A codex run with no final message must not become a silent approval."""
+        run_patch, which_patch, probe_patch = self._mocks()
+
+        async def _no_output(args: list[str], **kwargs: Any) -> RunResult:
+            return RunResult(
+                returncode=0, stdout="", stderr="", args=list(args), env={}
+            )
+
+        with run_patch as mock_run, which_patch, probe_patch:
+            mock_run.side_effect = _no_output
+            with pytest.raises(RuntimeError, match="no final message"):
+                await review_loop("codex", "target", max_iterations=1)

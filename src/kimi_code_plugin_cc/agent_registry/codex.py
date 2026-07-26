@@ -1,34 +1,398 @@
-"""Codex CLI adapter skeleton — validates the abstraction shape."""
+"""Adapter for the OpenAI Codex CLI (``codex exec``).
+
+Second real agent behind the bridge, and the proof that the ``AgentAdapter``
+abstraction generalises: registry, shared runner, policy cap, error contract
+and capability probing are all reused unchanged.
+
+Two things differ from the kimi adapter and drive the design here:
+
+**Completion.** ``codex exec`` is batch — it prints, writes its final message,
+and exits on its own, so there is no completion sentinel and no process tree to
+reap (kimi needs both, because long-lived MCP servers keep it alive after it
+has answered). The runner's timeout is a pure backstop, not the expected
+completion path.
+
+**Payload.** The answer comes from the ``-o/--output-last-message`` file, not
+from stdout. The ``--json`` event stream is captured for diagnostics only;
+parsing it is deliberately not load-bearing, so an upstream schema change
+cannot silently corrupt a review verdict. A missing or empty file is a failure
+even on exit 0 — an empty answer must never read as an approval.
+
+Flag surface verified live against ``codex-cli 0.145.0`` (``codex exec
+--help``, 2026-07-26). Everything beyond the base surface is capability-gated;
+``tests/test_cli_contract.py`` pins the base surface against the real CLI.
+"""
 
 from __future__ import annotations
 
-from kimi_code_plugin_cc.agent_registry.base import AgentAdapter
-from kimi_code_plugin_cc.protocol.messages import AgentMessage
+import asyncio
+import shutil
+import tempfile
+from pathlib import Path
+from typing import cast
+
+from kimi_code_plugin_cc.agent_registry.capabilities import supports_flag
+from kimi_code_plugin_cc.agent_registry.common import (
+    assert_prompt_fits,
+    env_flag_enabled,
+    resolve_executable,
+    validate_model_alias,
+)
+from kimi_code_plugin_cc.bridge.runner import (
+    DEPTH_ENV_VAR,
+    RunResult,
+    assert_spawn_allowed,
+    run_agent_process,
+)
+from kimi_code_plugin_cc.protocol.messages import (
+    DEFAULT_MAX_DEPTH,
+    DEFAULT_POLICY,
+    AgentMessage,
+    ApprovalPolicyLiteral,
+)
+from kimi_code_plugin_cc.security.policy import (
+    create_isolated_worktree,
+    resolve_effective_policy,
+)
+
+from .base import AgentAdapter
+
+CODEX_EXECUTABLE = "codex"
+DEFAULT_TIMEOUT_SECONDS = 600
+
+# Install channel, verified against the project's own README (openai/codex).
+INSTALL_HINT = (
+    "Install the Codex CLI with 'npm install -g @openai/codex' "
+    "(or 'brew install --cask codex'), then run 'codex --version'."
+)
+
+# Pinned base surface, verified live against codex-cli 0.145.0. Anything not in
+# this list is capability-gated — do not add a flag here just because your CLI
+# has it.
+EXEC_SUBCOMMAND = "exec"
+SANDBOX_FLAG = "--sandbox"
+JSON_FLAG = "--json"
+OUTPUT_FLAG = "-o"
+MODEL_FLAG = "-m"
+
+# Everything after this is a positional argument. Without it clap parses a
+# prompt beginning with '-' as an unknown flag and the run dies before it
+# starts (verified: `codex exec --hello` -> "unexpected argument found").
+ARGS_SEPARATOR = "--"
+
+# Long-form spellings of the flags above, used by the contract test and by
+# `doctor` to check the installed CLI still offers what the adapter emits.
+REQUIRED_EXEC_FLAGS = ("--sandbox", "--json", "--output-last-message", "--model")
+
+# Invariant 2 — structural ban on auto-approve. These are codex's equivalents
+# of kimi's --yolo and are NEVER emitted, for any input: the strings appear in
+# no code path that builds argv, and _build_base_command re-asserts the ban as
+# defense in depth.
+NEVER_FLAGS = (
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--dangerously-bypass-hook-trust",
+)
+BANNED_SANDBOX_MODE = "danger-full-access"
+
+# The only sandbox modes the plugin's policy model can produce. An allowlist,
+# so a future mapping edit cannot widen the sandbox by accident.
+ALLOWED_SANDBOX_MODES = frozenset({"read-only", "workspace-write"})
+
+# Plugin policy -> codex sandbox mode.
+#
+# 'explicit' is deliberately absent: it means "a human approves each action",
+# and `codex exec` is non-interactive, so there is nobody to ask. Recording a
+# policy the CLI cannot enact is the defect this repo already refuses for kimi,
+# so the adapter raises rather than silently downgrading.
+#
+# Unlike kimi, 'accept-edits' IS enactable here (`--sandbox workspace-write` is
+# a verified flag), so it is honoured — but only up to the KIMI_MAX_POLICY
+# ceiling (read-only by default) and only inside the isolated worktree.
+POLICY_TO_SANDBOX = {
+    "read-only": "read-only",
+    "accept-edits": "workspace-write",
+}
+
+# Capability-gated flags. --skip-git-repo-check is not optional in practice:
+# the isolated worktree is a bare temp directory, and codex refuses to start
+# outside a git repository ("Not inside a trusted directory and
+# --skip-git-repo-check was not specified", verified live). It only permits a
+# run we deliberately want and never widens the sandbox, so it is not part of
+# the isolation opt-out below.
+SKIP_GIT_REPO_CHECK_FLAG = "--skip-git-repo-check"
+
+# Session isolation makes reviews reproducible and keeps the user's ~/.codex
+# session store clean. Caveat: --ignore-user-config also skips config.toml, so
+# model aliases or custom providers defined there stop resolving; that surfaces
+# as a loud CLI error, and KIMI_CODEX_ISOLATE_SESSION=0 turns it off.
+EPHEMERAL_FLAG = "--ephemeral"
+IGNORE_USER_CONFIG_FLAG = "--ignore-user-config"
+SESSION_ISOLATION_FLAGS = (EPHEMERAL_FLAG, IGNORE_USER_CONFIG_FLAG)
+ISOLATION_FLAGS = (*SESSION_ISOLATION_FLAGS, SKIP_GIT_REPO_CHECK_FLAG)
+ENV_ISOLATE_SESSION = "KIMI_CODEX_ISOLATE_SESSION"
+
+# The CLI writes the final message into a directory of ours, deliberately
+# OUTSIDE the agent's working root: under `workspace-write` a model-generated
+# command could otherwise overwrite the very file we treat as the answer.
+LAST_MESSAGE_FILENAME = "last-message.txt"
+_OUTBOX_PREFIX = "kimi_codex_out_"
+
+# How much stdout to quote when a run fails without writing to stderr.
+_MAX_CONTEXT_CHARS = 2000
 
 
-class AdapterNotImplementedError(NotImplementedError):
-    """Raised when a registered adapter is a skeleton, not a usable adapter.
+def _failure_context(result: RunResult) -> str:
+    """Return the most useful diagnostic text from a failed run."""
+    stderr = result.stderr.strip()
+    if stderr:
+        return stderr
+    stdout = result.stdout.strip()
+    if stdout:
+        return f"(no stderr) last stdout: {stdout[-_MAX_CONTEXT_CHARS:]}"
+    return "(no output on either stream)"
 
-    Distinct from bare :class:`NotImplementedError` so callers (and the MCP
-    surface) can produce a helpful message instead of a deep stack trace.
+
+def read_final_message(path: Path, result: RunResult) -> str:
+    """Return the agent's final message, or raise a classified failure.
+
+    Fail-closed in three directions, each of which must resolve to a non-
+    approval rather than to empty-but-successful output:
+
+    * non-zero exit — reported with whatever diagnostic the CLI produced;
+    * no last-message file — a clean exit that answered nothing;
+    * a blank last-message file — same, but the CLI created the file.
+
+    ``RuntimeError`` is what :mod:`kimi_code_plugin_cc.errors` maps to
+    ``agent_failed``, which every loop already treats as a non-approval.
     """
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Codex CLI exited with {result.returncode}: {_failure_context(result)}"
+        )
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(
+            "Codex CLI exited cleanly but wrote no final message to "
+            f"{path.name}: {_failure_context(result)}"
+        ) from exc
+    if not text.strip():
+        raise RuntimeError(
+            "Codex CLI wrote an empty final message; treating the run as failed "
+            f"rather than as an empty answer: {_failure_context(result)}"
+        )
+    return text.strip()
 
 
 class CodexAdapter(AgentAdapter):
-    """Skeleton adapter for the OpenAI Codex CLI.
+    """Spawn ``codex exec`` per turn and return its final message.
 
-    This is intentionally not implemented in v1.0. It exists to validate that the
-    ``AgentAdapter`` abstraction generalises beyond Kimi Code and can accommodate a
-    ``codex exec`` style command in the future. Calling :meth:`run` raises a
-    typed :class:`AdapterNotImplementedError`.
+    Execution itself (subprocess spawn, timeout, depth guard, env allowlist) is
+    delegated to :func:`run_agent_process`, so there is exactly one
+    process-spawning code path in the plugin. This adapter owns only the
+    codex-specific concerns: command shape, policy-to-sandbox mapping,
+    capability gating, and reading the last-message file.
     """
+
+    def __init__(
+        self,
+        name: str = "codex",
+        worktree: Path | None = None,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        use_isolated_worktree: bool = True,
+        model: str | None = None,
+        isolate_session: bool | None = None,
+    ) -> None:
+        self._name = name
+        self._worktree = worktree
+        self._timeout = timeout
+        self._use_isolated_worktree = use_isolated_worktree
+        # Default model for every run; a per-call ``model`` context key wins.
+        # None lets codex use its own configured default.
+        self._model = model
+        # None defers to KIMI_CODEX_ISOLATE_SESSION (default on); an explicit
+        # bool wins, so an embedding caller can opt out without touching env.
+        self._isolate_session = isolate_session
 
     @property
     def name(self) -> str:
-        return "codex"
+        return self._name
 
-    async def run(self, prompt: str, context: dict) -> AgentMessage:
-        raise AdapterNotImplementedError(
-            "CodexAdapter is a skeleton for v1.0 and does not spawn processes yet. "
-            "Use the 'kimi' agent instead."
+    async def run(self, prompt: str, context: dict | None = None) -> AgentMessage:
+        """Run ``codex exec`` and return the message it wrote to ``-o``."""
+        ctx = context or {}
+        depth = int(ctx.get("depth", 0))
+        bridge_id = str(ctx.get("bridge_id", self._name))
+        policy = self._resolve_policy(ctx)
+        model = ctx.get("model", self._model)
+        if model is not None:
+            model = validate_model_alias(model)
+        assert_prompt_fits(prompt)
+
+        payload = await self._execute(prompt, POLICY_TO_SANDBOX[policy], model, depth)
+        return AgentMessage(
+            bridge_id=bridge_id, depth=depth, approval_policy=policy, payload=payload
         )
+
+    def _resolve_policy(self, context: dict) -> ApprovalPolicyLiteral:
+        """Return the effective policy, or refuse if it cannot be enacted.
+
+        The requested policy is capped against ``KIMI_MAX_POLICY`` by the
+        shared resolver, which also rejects names outside the plugin's
+        vocabulary — that is what makes codex's ``danger-full-access``
+        unreachable: it is not a plugin policy, so no caller string maps to it.
+
+        Unlike the kimi adapter this does *not* normalise an unknown policy to
+        read-only. Here the policy is enacted as a real sandbox mode, so
+        silently reinterpreting the caller's intent would hide a bug; refusing
+        is equally fail-closed and far easier to diagnose.
+        """
+        requested = context.get("approval_policy", DEFAULT_POLICY)
+        if not isinstance(requested, str):
+            raise ValueError(
+                f"approval_policy must be a string, got {type(requested).__name__}"
+            )
+        effective = resolve_effective_policy(requested)
+        effective_str = cast(ApprovalPolicyLiteral, effective.to_string())
+        if effective_str not in POLICY_TO_SANDBOX:
+            raise PermissionError(
+                f"Policy {effective_str!r} cannot be enacted by codex: "
+                "'codex exec' is non-interactive, so there is no per-action "
+                "approval step to honour. Use 'read-only', or 'accept-edits' "
+                "with KIMI_MAX_POLICY raised accordingly."
+            )
+        return effective_str
+
+    async def _execute(
+        self, prompt: str, sandbox: str, model: str | None, depth: int
+    ) -> str:
+        """Build the command, run it, and extract the final message.
+
+        A cheap depth pre-check runs first so a blocked spawn never creates
+        temp directories; the runner re-checks authoritatively against the
+        inherited environment. Both temp directories are removed in a
+        ``finally`` so long-running MCP sessions cannot leak them.
+        """
+        assert_spawn_allowed(depth, DEFAULT_MAX_DEPTH)
+
+        prefix = resolve_executable(CODEX_EXECUTABLE, INSTALL_HINT)
+        workdir = self._resolve_workdir()
+        # We own the worktree only if we created it fresh this turn; an
+        # explicitly supplied worktree is caller-managed.
+        own_workdir = (
+            workdir
+            if (self._use_isolated_worktree and self._worktree is None)
+            else None
+        )
+        outbox = Path(tempfile.mkdtemp(prefix=_OUTBOX_PREFIX))
+        last_message = outbox / LAST_MESSAGE_FILENAME
+        try:
+            command = await self._build_command(
+                prefix, prompt, sandbox, model, last_message
+            )
+            # No early_exit_check: codex exec exits on its own, so the runner's
+            # plain wait-for-exit path is correct and the timeout stays a
+            # backstop.
+            result = await run_agent_process(
+                command,
+                env={DEPTH_ENV_VAR: str(depth)},
+                timeout=self._timeout,
+                max_depth=DEFAULT_MAX_DEPTH,
+                cwd=workdir,
+            )
+            return read_final_message(last_message, result)
+        finally:
+            shutil.rmtree(outbox, ignore_errors=True)
+            if own_workdir is not None:
+                shutil.rmtree(own_workdir, ignore_errors=True)
+
+    def _build_base_command(
+        self, prefix: list[str], sandbox: str, last_message: Path
+    ) -> list[str]:
+        """Return the pinned base argv, refusing any off-list sandbox mode.
+
+        The allowlist check is defense in depth: :meth:`_resolve_policy`
+        already makes a dangerous mode unreachable, but a future edit to
+        :data:`POLICY_TO_SANDBOX` must fail loudly here rather than widen the
+        sandbox silently.
+        """
+        if sandbox not in ALLOWED_SANDBOX_MODES:
+            raise ValueError(
+                f"Refusing to build a codex command with sandbox mode "
+                f"{sandbox!r}: only {sorted(ALLOWED_SANDBOX_MODES)} are "
+                "reachable through the plugin's policy model."
+            )
+        return [
+            *prefix,
+            EXEC_SUBCOMMAND,
+            SANDBOX_FLAG,
+            sandbox,
+            JSON_FLAG,
+            OUTPUT_FLAG,
+            str(last_message),
+        ]
+
+    async def _build_command(
+        self,
+        prefix: list[str],
+        prompt: str,
+        sandbox: str,
+        model: str | None,
+        last_message: Path,
+    ) -> list[str]:
+        """Assemble the full argv: base flags, gated flags, model, prompt.
+
+        The prompt is the final element and is preceded by ``--``, so its
+        content is always a positional value and can never be re-read as a
+        flag. (codex can also take the prompt on stdin, which would sidestep
+        the argv length cap — not usable here, because the runner pins
+        ``stdin=DEVNULL`` to avoid the Windows Proactor pipe block.)
+        """
+        command = self._build_base_command(prefix, sandbox, last_message)
+        command += await self._isolation_flags(prefix)
+        if model is not None:
+            command += [MODEL_FLAG, model]
+        command += [ARGS_SEPARATOR, prompt]
+        return command
+
+    async def _isolation_flags(self, prefix: list[str]) -> list[str]:
+        """Return the supported subset of the optional flags.
+
+        Fail-safe: a flag the installed CLI does not advertise is omitted,
+        because passing an unknown flag would make every call fail. The probe
+        targets ``codex exec --help`` — these flags live on the subcommand, not
+        on the top-level command.
+        """
+        probe_prefix = [*prefix, EXEC_SUBCOMMAND]
+        flags: list[str] = []
+        if await self._supports(probe_prefix, SKIP_GIT_REPO_CHECK_FLAG):
+            flags.append(SKIP_GIT_REPO_CHECK_FLAG)
+        if not self._session_isolation_enabled():
+            return flags
+        for flag in SESSION_ISOLATION_FLAGS:
+            if await self._supports(probe_prefix, flag):
+                flags.append(flag)
+        return flags
+
+    async def _supports(self, probe_prefix: list[str], flag: str) -> bool:
+        """Probe the installed CLI off the event loop (the probe is blocking)."""
+        return await asyncio.to_thread(supports_flag, probe_prefix, flag)
+
+    def _session_isolation_enabled(self) -> bool:
+        """Return whether ``--ephemeral``/``--ignore-user-config`` are wanted."""
+        if self._isolate_session is not None:
+            return self._isolate_session
+        return env_flag_enabled(ENV_ISOLATE_SESSION)
+
+    def _resolve_workdir(self) -> Path | None:
+        """Return the working directory for the agent subprocess.
+
+        An explicit worktree wins. Otherwise, when isolation is enabled, a
+        fresh directory is created so the agent never implicitly reads or
+        writes the host repository.
+        """
+        if self._worktree is not None:
+            return self._worktree
+        if self._use_isolated_worktree:
+            return create_isolated_worktree()
+        return None
