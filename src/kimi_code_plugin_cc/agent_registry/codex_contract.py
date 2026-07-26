@@ -112,6 +112,8 @@ SESSION_ISOLATION_FLAGS = (EPHEMERAL_FLAG, IGNORE_USER_CONFIG_FLAG)
 ENV_ISOLATE_SESSION = "KIMI_CODEX_ISOLATE_SESSION"
 
 # The CLI writes the final message into a directory of ours, deliberately
-# OUTSIDE the agent's working root: under `workspace-write` a model-generated
-# command could otherwise overwrite the very file we treat as the answer.
+# OUTSIDE the agent's working root. This is tidiness plus defense in depth, not
+# a security boundary: the payload is agent-authored either way, and every
+# consumer of it is fail-closed. It simply means a model-generated command
+# under `workspace-write` cannot reach the file after codex has written it.
 LAST_MESSAGE_FILENAME = "last-message.txt"

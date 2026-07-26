@@ -268,15 +268,12 @@ def _run_subprocess_streaming(
 
 
 # Child-process environment allowlist. Only these variables are forwarded to
-# the spawned agent; everything else from the host environment (including any
-# tokens/secrets) is dropped. This prevents a compromised or prompt-injected
-# agent from exfiltrating host secrets via `env`.
-#
-# - PATH / PATHEXT / SYSTEMROOT / COMSPEC / WINDIR / APPDATA: the child needs
-#   these to find its own executables and the kimi CLI on Windows.
-# - HOME / USERPROFILE / TMP / TEMP: standard runtime locations.
-# Credential-free base: only what any child needs to find its own executables
-# and temp/home locations. Auth vars are vendor-specific — see AuthEnv below.
+# every spawned agent; everything else from the host environment (including any
+# tokens/secrets) is dropped, so a compromised or prompt-injected agent cannot
+# exfiltrate host secrets via `env`. The set is deliberately credential-free —
+# PATH-class variables so the child can find its own executables (and the CLI
+# on Windows), plus standard runtime locations. Auth variables are
+# vendor-specific and are declared per agent; see AuthEnv below.
 _ALLOWED_ENV_EXACT = frozenset(
     {
         "PATH",
@@ -341,7 +338,7 @@ def _guarded_child_env(
     """Enforce the depth guard and return the child's environment.
 
     One decision, not two: the depth the child is told it runs at must be the
-    depth the guard just approved. Raises before anything is spawned.
+    depth the guard approved. Raises before anything is spawned.
     """
     overrides = dict(env or {})
     # The depth variable is authoritatively managed here; strip any

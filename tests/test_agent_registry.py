@@ -953,9 +953,9 @@ class TestCodexPayload:
         adapter = CodexAdapter()
         run_patch, which_patch, probe_patch = _codex_mocks()
         with run_patch as mock_run, which_patch, probe_patch:
-            mock_run.side_effect = _codex_runner(payload="Prüfung — 完了 ✓")
+            mock_run.side_effect = _codex_runner(payload="Prüfung — 完了")
             result = await adapter.run("prompt", {})
-        assert result.payload == "Prüfung — 完了 ✓"
+        assert result.payload == "Prüfung — 完了"
 
 
 class TestCodexModelAndPromptGuards:
