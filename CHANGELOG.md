@@ -8,6 +8,14 @@ match `.claude-plugin/plugin.json` / `pyproject.toml`.
 
 ### Added
 
+- **Vision: native subagent skills** (`docs/vision-native-subagent-skills.md`):
+  pinned evolution direction for a parallel execution path that uses Claude
+  Code's native subagent dispatch (`Agent` tool) instead of the external Kimi
+  CLI, so users without a Kimi Code license can use the plugin's review,
+  planning, and santa-loop capabilities. Model selection (e.g. Opus, Sonnet)
+  would work through Claude Code's native mechanism. Status: vision only — no
+  design or implementation plan yet.
+
 - **Loop run transcripts** (`transcript.py`): every review/santa/planning run
   persists a local transcript under
   `~/.kimi-code-plugin-cc/transcripts/<run_id>/` (a `run.json` summary plus
